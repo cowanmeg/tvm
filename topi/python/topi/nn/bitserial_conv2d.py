@@ -23,7 +23,7 @@ SpatialPackNHWC = namedtuple('SpatialPack',
 _WORKLOADS = [
     # workloads of resnet18 on imagenet
     # input_size, input_size, ic, oc, kh, kw, pad, pad, stride, stride
-    Workload('uint32', 'int32', 56, 56, 64, 64, 3, 3, 1, 1, 1, 1),
+    Workload('int32', 'int32', 56, 56, 64, 64, 3, 3, 1, 1, 1, 1),
     Workload('uint32', 'int32', 56, 56, 64, 64, 1, 1, 0, 0, 1, 1),
     Workload('uint32', 'int32', 56, 56, 64, 128, 3, 3, 1, 1, 2, 2),
     Workload('uint32', 'int32', 56, 56, 64, 128, 1, 1, 0, 0, 2, 2),
@@ -44,7 +44,7 @@ _WORKLOADS = [
 
 @tvm.target.generic_func
 def bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits,
-                     layout='NCHW', pack_dtype='uint32', out_dtype='int32', dorefa=True):
+                     layout='NCHW', pack_dtype='uint32', out_dtype='int32', dorefa=False):
     """Bitserial Conv2D operator.
 
     Parameters

@@ -360,3 +360,45 @@ def schedule_l2_normalize(attrs, outs, target):
         return topi.generic.schedule_l2_normalize(outs)
 
 reg.register_pattern("l2_normalize", OpPattern.OUT_ELEMWISE_FUSABLE)
+
+# bitserial_conv2d
+@reg.register_compute("bitserial_conv2d")
+def compute_bitserial_conv2d(attrs, inputs, _):
+    """Compute definition of bitserial_conv2d"""
+    padding = attrs.get_int_tuple("padding")
+    strides = attrs.get_int_tuple("strides")
+    groups = attrs.get_int("groups")
+    channels = attrs.get_int("channels")
+    layout = attrs["layout"]
+    dilation = attrs.get_int_tuple("dilation")
+    out_dtype = attrs["out_dtype"]
+    activation_bits = attrs.get_int("activation_bits")
+    weight_bits = attrs.get_int("weight_bits")
+    #in_type = attrs["in_type"]
+    assert layout == "NCHW" or layout == "NHWC"
+    assert dilation == (1, 1), "not support dilate now"
+    if groups == 1:
+        out = topi.nn.bitserial_conv2d(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, layout=layout,
+                              out_dtype=out_dtype)
+    else:
+        raise ValueError("not support arbitrary group number for now")
+    if attrs.get_bool("use_bias"):
+        bias = inputs[2]
+        expand_axis = 1 if layout == "NCHW" else 0
+        bias = topi.expand_dims(bias, axis=expand_axis, num_newaxis=2)
+        out = topi.broadcast_add(out, bias)
+    return out
+
+@reg.register_schedule("bitserial_conv2d")
+def schedule_bitserial_conv2d(attrs, outs, target):
+    """Schedule definition of bitserial_conv2d"""
+    groups = attrs.get_int("groups")
+    layout = attrs["layout"]
+    with tvm.target.create(target):
+        if groups == 1 and layout == "NCHW":
+            return topi.generic.schedule_bitserial_conv2d_nchw(outs)
+        elif groups == 1 and layout == "NHWC":
+            return topi.generic.schedule_bitserial_conv2d_nhwc(outs)
+        return None
+#TODO: not certain what pattern to use
+reg.register_pattern("bitserail_conv2d", OpPattern.OUT_ELEMWISE_FUSABLE)

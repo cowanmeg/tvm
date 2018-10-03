@@ -562,5 +562,38 @@ v            (batch_size, channels, out_height, out_width) if `layout` is `NCHW`
 .set_num_inputs(UseBiasNumInputs<Conv2DTransposeParam>)
 .set_support_level(2);
 
+// Note: Relying on many of Conv2d's helper functions
+NNVM_REGISTER_OP(bitserial_conv2d)
+.describe(R"code(2D bitserial convolution layer (e.g. spatial convolution over images).
+
+This layer creates a convolution kernel that is convolved
+with the layer input to produce a tensor of
+outputs. If `use_bias` is True,
+a bias vector is created and added to the outputs.
+
+- **data**: This depends on the `layout` parameter. Input is 4D array of shape
+            (batch_size, in_channels, height, width) if `layout` is `NCHW`.
+- **weight**: (channels, in_channels, kernel_size[0], kernel_size[1])
+- **bias**: (channels,)
+- **out**:  This depends on the `layout` parameter. Output is 4D array of shape
+            (batch_size, channels, out_height, out_width) if `layout` is `NCHW`.
+
+)code" NNVM_ADD_FILELINE)
+.add_argument("data", "4D Tensor", "Input data.")
+.add_argument("weight", "4D Tensor", "Weight matrix.")
+.add_argument("bias", "1D Tensor", "Bias parameter.")
+// .add_argumnet("bits_weight", "int", "Precision of the weights")
+.add_arguments(Conv2DParam::__FIELDS__())
+.set_attr_parser(ParamParser<Conv2DParam>)
+.set_attr<FGetAttrDict>("FGetAttrDict", ParamGetAttrDict<Conv2DParam>)
+.set_attr<FListInputNames>("FListInputNames", UseBiasListInputNames<Conv2DParam>)
+.set_attr<FInferShape>("FInferShape", Conv2DInferShape)
+.set_attr<FInferType>("FInferType", Conv2DInferType<Conv2DParam>)
+.set_attr<FCorrectLayout>("FCorrectLayout", Conv2DCorrectLayout<Conv2DParam>)
+.set_num_outputs(1)
+.set_num_inputs(UseBiasNumInputs<Conv2DParam>)
+.set_support_level(2); // TODO: not certain about this support level
+
+
 }  // namespace top
 }  // namespace nnvm

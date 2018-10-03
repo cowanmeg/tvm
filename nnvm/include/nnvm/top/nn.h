@@ -124,6 +124,8 @@ struct Conv2DParam : public dmlc::Parameter<Conv2DParam> {
   std::string kernel_layout;
   std::string out_layout;
   int out_dtype;
+  int activation_bits;
+  int weight_bits;
   bool use_bias;
 
   DMLC_DECLARE_PARAMETER(Conv2DParam) {
@@ -162,6 +164,10 @@ struct Conv2DParam : public dmlc::Parameter<Conv2DParam> {
       .add_enum("same", -1)
       .set_default(-1)
       .describe("Output data type, set to explicit type under mixed precision setting");
+    DMLC_DECLARE_FIELD(weight_bits).set_default(-1)
+      .describe("Bitserial: Number of bits for the kernel.");
+    DMLC_DECLARE_FIELD(activation_bits).set_default(-1)
+      .describe("Bitserial: Number of bits for acitvations/data.");
 
     DMLC_DECLARE_FIELD(use_bias).set_default(true)
       .describe("Whether the layer uses a bias vector.");

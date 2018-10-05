@@ -25,9 +25,12 @@ See the [community structure document](http://docs.tvm.ai/contribute/community.h
 - [Kazutaka Morita](https://github.com/kazum)
 - [Tatsuya Nishiyama](https://github.com/nishi-t)
 - [Pariksheet Pinjari](https://github.com/PariksheetPinjari909)
+- [Jared Roesch](https://github.com/jroesch)
 - [Siva](https://github.com/srkreddy1238)
+- [Siju Samuel](https://github.com/siju-samuel)
 - [Alex Weaver](https://github.com/alex-weaver)
 - [Yao Wang](https://github.com/kevinthesun)
+- [Jian Weng](https://github.com/were)
 - [Eddie Yan](https://github.com/eqy)
 - [Joshua Z. Zhang](https://github.com/zhreshold)
 
@@ -35,7 +38,6 @@ See the [community structure document](http://docs.tvm.ai/contribute/community.h
 - [Full List of Contributors](https://github.com/dmlc/tvm/graphs/contributors)
   - To contributors: please add your name to the list.
 - [Qiao Zhang](https://github.com/zhangqiaorjc)
-- [Jian Weng](https://github.com/were)
 - [Haolong Zhang](https://github.com/haolongzhangm)
 - [Cody Hao Yu](https://github.com/comaniac)
 - [Chris Nuernberger](https://github.com/cnuernber)

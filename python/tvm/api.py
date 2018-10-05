@@ -45,6 +45,28 @@ def const(value, dtype=None):
     return _api_internal._const(value, dtype)
 
 
+def get_env_func(name):
+    """Get an EnvFunc by a global name.
+
+    Parameters
+    ----------
+    name: str
+        The name of the global function.
+
+    Returns
+    -------
+    env_func : EnvFunc
+        The result env function.
+
+    Note
+    ----
+    EnvFunc is a Node wrapper around
+    global function that can be serialized via its name.
+    This can be used to serialize function field in the language.
+    """
+    return _api_internal._EnvFuncGet(name)
+
+
 def convert(value):
     """Convert value to TVM node or function.
 
@@ -134,9 +156,9 @@ def any(*args):
         raise ValueError("Any must take at least 1 argument")
     if len(args) == 1:
         return args[0]
-    ret = _expr.Or(args[0], args[1])
+    ret = _make._OpOr(args[0], args[1])
     for i in range(2, len(args)):
-        ret = _expr.Or(ret, args[i])
+        ret = _make._OpOr(ret, args[i])
     return ret
 
 
@@ -158,9 +180,9 @@ def all(*args):
         raise ValueError("Any must take at least 1 argument")
     if len(args) == 1:
         return args[0]
-    ret = _expr.And(args[0], args[1])
+    ret = _make._OpAnd(args[0], args[1])
     for i in range(2, len(args)):
-        ret = _expr.And(ret, args[i])
+        ret = _make._OpAnd(ret, args[i])
     return ret
 
 
@@ -216,10 +238,10 @@ def compute(shape, fcompute, name="compute", tag="", attrs=None):
     tensor: Tensor
         The created tensor
     """
-    if _tag.TagScope.current is not None:
+    if _tag.TagScope.get_current() is not None:
         if tag != "":
             raise ValueError("nested tag is not allowed for now")
-        tag = _tag.TagScope.current.tag
+        tag = _tag.TagScope.get_current().tag
     shape = (shape,) if isinstance(shape, _expr.Expr) else shape
     ndim = len(shape)
     code = fcompute.__code__
@@ -289,10 +311,10 @@ def scan(init, update, state_placeholder, inputs=None, name="scan", tag="", attr
       s_update = tvm.compute((m, n), lambda t, i: s_state[t-1, i] + X[t, i])
       res = tvm.scan(s_init, s_update, s_state, X)
     """
-    if _tag.TagScope.current is not None:
+    if _tag.TagScope.get_current() is not None:
         if tag != "":
             raise ValueError("nested tag is not allowed for now")
-        tag = _tag.TagScope.current.tag
+        tag = _tag.TagScope.get_current().tag
     if isinstance(init, _tensor.Tensor):
         init = [init]
     if isinstance(update, _tensor.Tensor):
@@ -385,10 +407,10 @@ def extern(shape,
                           "tvm.contrib.cblas.matmul",
                             ins[0], ins[1], outs[0], 0, 0), name="C")
     """
-    if _tag.TagScope.current is not None:
+    if _tag.TagScope.get_current() is not None:
         if tag != "":
             raise ValueError("nested tag is not allowed for now")
-        tag = _tag.TagScope.current.tag
+        tag = _tag.TagScope.get_current().tag
     shape = (shape,) if isinstance(shape, (_expr.Expr, _Integral)) else shape
     shape = [shape] if isinstance(shape[0], (_expr.Expr, _Integral)) else shape
     if in_buffers is not None:
@@ -751,5 +773,5 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
 _init_api("tvm.api")
 #pylint: disable=unnecessary-lambda
 sum = comm_reducer(lambda x, y: x+y, lambda t: const(0, dtype=t), name="sum")
-min = comm_reducer(lambda x, y: _expr.Min(x, y), max_value, name='min')
-max = comm_reducer(lambda x, y: _expr.Max(x, y), min_value, name='max')
+min = comm_reducer(lambda x, y: _make._OpMin(x, y), max_value, name='min')
+max = comm_reducer(lambda x, y: _make._OpMax(x, y), min_value, name='max')

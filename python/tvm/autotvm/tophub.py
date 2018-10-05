@@ -2,7 +2,7 @@
 TopHub: Tensor Operator Hub
 To get the best performance, we typically need auto-tuning for the specific devices.
 TVM releases pre-tuned parameters in TopHub for some common networks and hardware targets.
-TVM will download these parameters for you when you create the target for the first time.
+TVM will download these parameters for you when you call nnvm.compiler.build_module .
 """
 # pylint: disable=invalid-name
 
@@ -13,15 +13,21 @@ import sys
 from .task import ApplyHistoryBest
 from .. import target as _target
 from ..contrib.download import download
+from .record import load_from_file
 
 # root path to store TopHub files
 AUTOTVM_TOPHUB_ROOT_PATH = os.path.join(os.path.expanduser('~'), ".tvm", "tophub")
 
 # the version of each package
 PACKAGE_VERSION = {
+    'arm_cpu': "v0.03",
+
+    'cuda':    "v0.02",
+    'rocm':    "v0.01",
+    'opencl':  "v0.01",
+    'mali':    "v0.02",
+
     'vta':     "v0.01",
-    'arm_cpu': "v0.01",
-    'cuda':    "v0.01",
 }
 
 logger = logging.getLogger('autotvm')
@@ -30,6 +36,9 @@ def _alias(name):
     """convert alias for some packages"""
     table = {
         'vtacpu': 'vta',
+
+        'metal': 'opencl',
+        'nvptx': 'cuda',
     }
     return table.get(name, name)
 
@@ -42,29 +51,35 @@ def context(target, extra_files=None):
 
     Parameters
     ----------
-    target: Target
+    target: Target or List of Target
         The compilation target
     extra_files: list of str, optional
         Extra log files to load
     """
     best_context = ApplyHistoryBest([])
 
-    if isinstance(target, str):
-        target = _target.create(target)
+    targets = target if isinstance(target, (list, tuple)) else [target]
 
-    possible_names = [str(target).split()[0]]
-    for opt in target.options:
-        if opt.startswith("-device"):
-            device = _alias(opt[8:])
-            possible_names.append(device)
+    for tgt in targets:
+        if isinstance(tgt, str):
+            tgt = _target.create(tgt)
 
-    all_packages = list(PACKAGE_VERSION.keys())
-    for name in possible_names:
-        if name in all_packages:
-            check_backend(name)
+        possible_names = []
+        for opt in tgt.options:
+            if opt.startswith("-device"):
+                device = _alias(opt[8:])
+                possible_names.append(device)
+        possible_names.append(tgt.target_name)
 
-            filename = "%s_%s.log" % (name, PACKAGE_VERSION[name])
-            best_context.load(os.path.join(AUTOTVM_TOPHUB_ROOT_PATH, filename))
+        all_packages = list(PACKAGE_VERSION.keys())
+        for name in possible_names:
+            name = _alias(name)
+            if name in all_packages:
+                check_backend(name)
+
+                filename = "%s_%s.log" % (name, PACKAGE_VERSION[name])
+                best_context.load(os.path.join(AUTOTVM_TOPHUB_ROOT_PATH, filename))
+                break   # only load one file to avoid some fallback template mismatch problem
 
     if extra_files:
         for filename in extra_files:
@@ -121,3 +136,51 @@ def download_package(package_name):
     logger.info("Download pre-tuned parameters package %s", package_name)
     download("https://raw.githubusercontent.com/uwsaml/tvm-distro/master/tophub/%s"
              % package_name, os.path.join(rootpath, package_name), True, verbose=0)
+
+
+# global cache for load_reference_log
+REFERENCE_LOG_CACHE = {}
+
+def load_reference_log(backend, model, workload_name, template_key):
+    """ Load reference log from TopHub to support fallback in template.
+    Template will use these reference logs to choose fallback config.
+
+    Parameters
+    ----------
+    backend: str
+        The backend name
+    model: str
+        The name of the model
+    workload_name: str
+        The name of the workload. (The first item in the workload tuple)
+    template_key: str
+        The template key
+    """
+
+    backend = _alias(backend)
+    version = PACKAGE_VERSION[backend]
+    package_name = "%s_%s.log" % (backend, version)
+    filename = os.path.join(AUTOTVM_TOPHUB_ROOT_PATH, package_name)
+
+    global REFERENCE_LOG_CACHE
+    key = (backend, model, workload_name, template_key)
+
+    if key not in REFERENCE_LOG_CACHE:
+        tmp = []
+        if os.path.isfile(os.path.join(AUTOTVM_TOPHUB_ROOT_PATH, package_name)):
+            find = False
+            inp = None
+            for inp, res in load_from_file(filename):
+                if model == inp.target.model:
+                    find = True
+                    break
+            if not find and inp:
+                model = inp.target.model
+
+            for inp, res in load_from_file(filename):
+                if (model == inp.target.model and inp.task.workload[0] == workload_name and
+                        inp.config.template_key == template_key):
+                    tmp.append((inp, res))
+        REFERENCE_LOG_CACHE[key] = tmp
+
+    return REFERENCE_LOG_CACHE[key]

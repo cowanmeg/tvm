@@ -24,18 +24,11 @@ def schedule_bitserial_dense(outs):
     s = tvm.create_schedule([x.op for x in outs])
 
     def _schedule(data_q, weight_q, weight_vec, output):
-        # s[weight_q].parallel(s[weight_q].op.axis[0])
-        # s[weight_vec].parallel(s[weight_vec].op.axis[1])
-
-
         i, j = s[output].op.axis
         db, wb, k = s[output].op.reduce_axis
-        # print (i, j)
-        # print (db, wb, k)
         jo, ji = s[output].split(j, factor=2)
-        # ko, ki = s[output].split(k, factor=32)
+
         s[output].reorder(i, jo, k, wb, db, ji)
-        # s[output].reorder(i, jo, k, wb, db, ji)
         s[output].vectorize(ji)
         s[output].unroll(db)
         s[output].unroll(wb)

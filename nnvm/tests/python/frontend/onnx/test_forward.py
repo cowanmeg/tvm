@@ -178,7 +178,7 @@ def test_power():
 def test_squeeze():
     in_shape = (1, 3, 1, 3, 1, 1)
     out_shape = (3, 3)
-    y = helper.make_node("Squeeze", ['in'], ['out'])
+    y = helper.make_node("Squeeze", ['in'], ['out'], axes=[0, 2, 4, 5])
 
     graph = helper.make_graph([y],
                               'squeeze_test',
@@ -387,7 +387,7 @@ def _test_upsample_nearest():
     in_shape = (1, 1, 3, 3)
     out_shape = (1, 1, 3*scale, 3*scale)
     y = helper.make_node("Upsample", ['in'], ['out'], mode='nearest', scales=[1.0, 1.0, 2.0, 2.0])
-    
+
     in_array = np.random.uniform(size=in_shape).astype(np.float32)
     out_array = topi.testing.upsampling_python(in_array, scale, "NCHW")
 
@@ -407,7 +407,7 @@ def _test_upsample_bilinear():
     in_shape = (1, 1, 3, 3)
     out_shape = (1, 1, 3*scale, 3*scale)
     y = helper.make_node("Upsample", ['in'], ['out'], mode='linear', scales=[1.0, 1.0, 2.0, 2.0])
-    
+
     in_array = np.random.uniform(size=in_shape).astype(np.float32)
     out_array = topi.testing.bilinear_resize_python(in_array, (3*scale, 3*scale), "NCHW")
 
@@ -426,6 +426,291 @@ def test_upsample():
     _test_upsample_nearest()
     _test_upsample_bilinear()
 
+def _test_softmax(inshape, axis):
+    opname = 'Softmax'
+    indata = np.random.uniform(size=inshape).astype(np.float32)
+    outshape = inshape
+    outdata = topi.testing.softmax_python(indata)
+    if isinstance(axis, int):
+        y = helper.make_node(opname, ['in'], ['out'], axis = axis)
+    elif axis is None:
+        y = helper.make_node(opname, ['in'], ['out'])
+
+    graph = helper.make_graph([y],
+                              opname+'_test',
+                              inputs = [helper.make_tensor_value_info("in",
+                                            TensorProto.FLOAT, list(indata.shape))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(outdata.shape))])
+
+    model = helper.make_model(graph, producer_name=opname+'_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, indata, target, ctx, outshape, 'float32')
+        np.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_softmax():
+    _test_softmax((1, 10), None)
+    _test_softmax((1, 10), 1)
+
+def verify_min(input_dim):
+    dtype = 'float32'
+
+    a_np1 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np2 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np3 = np.random.uniform(size=input_dim).astype(dtype)
+
+    b_np = np.min((a_np1, a_np2, a_np3), axis=0)
+
+    min_node = helper.make_node("Min", ["a_np1", "a_np2", "a_np3"], ["out"])
+
+    graph = helper.make_graph([min_node],
+                              "Min_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np2",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np3",
+                                            TensorProto.FLOAT, list(input_dim))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='Min_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1, a_np2, a_np3], target, ctx, b_np.shape)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_forward_min():
+    verify_min((1, 3, 20, 20))
+    verify_min((20, 20))
+
+def verify_max(input_dim):
+    dtype = 'float32'
+
+    a_np1 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np2 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np3 = np.random.uniform(size=input_dim).astype(dtype)
+
+    b_np = np.max((a_np1, a_np2, a_np3), axis=0)
+
+    max_node = helper.make_node("Max", ["a_np1", "a_np2", "a_np3"], ["out"])
+
+    graph = helper.make_graph([max_node],
+                              "Max_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np2",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np3",
+                                            TensorProto.FLOAT, list(input_dim))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='Max_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1, a_np2, a_np3], target, ctx, b_np.shape)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_forward_max():
+    verify_max((1, 3, 20, 20))
+    verify_max((20, 20))
+
+def verify_mean(input_dim):
+    dtype = 'float32'
+
+    a_np1 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np2 = np.random.uniform(size=input_dim).astype(dtype)
+    a_np3 = np.random.uniform(size=input_dim).astype(dtype)
+
+    b_np = np.mean((a_np1, a_np2, a_np3), axis=0)
+
+    mean_node = helper.make_node("Mean", ["a_np1", "a_np2", "a_np3"], ["out"])
+
+    graph = helper.make_graph([mean_node],
+                              "Mean_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np2",
+                                            TensorProto.FLOAT, list(input_dim)),
+                                        helper.make_tensor_value_info("a_np3",
+                                            TensorProto.FLOAT, list(input_dim))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='Mean_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1, a_np2, a_np3], target, ctx, b_np.shape)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_forward_mean():
+    verify_mean((1, 3, 20, 20))
+    verify_mean((20, 20))
+
+def verify_hardsigmoid(input_dim, alpha, beta):
+    dtype = 'float32'
+
+    a_np1 = np.random.uniform(size=input_dim).astype(dtype)
+
+    b_np = np.clip(a_np1 * alpha + beta, 0, 1)
+
+    hardsigmoid_node = helper.make_node("HardSigmoid", ["a_np1"], ["out"], alpha=alpha, beta=beta)
+
+    graph = helper.make_graph([hardsigmoid_node],
+                              "HardSigmoid_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.FLOAT, list(input_dim))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='HardSigmoid_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1], target, ctx, b_np.shape)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_forward_hardsigmoid():
+    verify_hardsigmoid((1, 3, 20, 20), 0.5, 0.6)
+    verify_hardsigmoid((20, 20), 0.3, 0.4)
+
+def verify_argmin(input_dim, axis=None, keepdims=None):
+    def _argmin_numpy(data, axis=0, keepdims=True):
+        result = np.argmin(data, axis=axis)
+        if (keepdims == 1):
+            result = np.expand_dims(result, axis)
+        return result.astype(data.dtype)
+
+    a_np1 = np.random.uniform(-10, 10, input_dim).astype(np.int32)
+    if keepdims is None and axis is None:
+        b_np = _argmin_numpy(a_np1)
+        node = onnx.helper.make_node('ArgMin',
+                                     inputs=['a_np1'],
+                                     outputs=['out'])
+    elif axis is None:
+        b_np = _argmin_numpy(a_np1, keepdims=keepdims)
+        node = onnx.helper.make_node('ArgMin',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     keepdims=keepdims)
+    elif keepdims is None:
+        b_np = _argmin_numpy(a_np1, axis=axis)
+        node = onnx.helper.make_node('ArgMin',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     axis=axis)
+    else:
+        b_np = _argmin_numpy(a_np1, axis=axis, keepdims=keepdims)
+        node = onnx.helper.make_node('ArgMin',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     axis=axis,
+                                     keepdims=keepdims)
+    graph = helper.make_graph([node],
+                              "argmin_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.INT32, list(a_np1.shape))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.INT32, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='argmin_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1], target, ctx, b_np.shape, b_np.dtype)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def verify_argmax(input_dim, axis=None, keepdims=None):
+    def _argmax_numpy(data, axis=0, keepdims=True):
+        result = np.argmax(data, axis=axis)
+        if (keepdims == 1):
+            result = np.expand_dims(result, axis)
+        return result.astype(data.dtype)
+
+    a_np1 = np.random.uniform(-10, 10, input_dim).astype(np.int32)
+
+    if keepdims is None and axis is None:
+        b_np = _argmax_numpy(a_np1)
+        node = onnx.helper.make_node('ArgMax',
+                                     inputs=['a_np1'],
+                                     outputs=['out'])
+    elif axis is None:
+        b_np = _argmax_numpy(a_np1, keepdims=keepdims)
+        node = onnx.helper.make_node('ArgMax',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     keepdims=keepdims)
+    elif keepdims is None:
+        b_np = _argmax_numpy(a_np1, axis=axis)
+        node = onnx.helper.make_node('ArgMax',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     axis=axis)
+    else:
+        b_np = _argmax_numpy(a_np1, axis=axis, keepdims=keepdims)
+        node = onnx.helper.make_node('ArgMax',
+                                     inputs=['a_np1'],
+                                     outputs=['out'],
+                                     axis=axis,
+                                     keepdims=keepdims)
+
+    graph = helper.make_graph([node],
+                              "argmax_test",
+                              inputs = [helper.make_tensor_value_info("a_np1",
+                                            TensorProto.INT32, list(a_np1.shape))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.INT32, list(b_np.shape))])
+
+    model = helper.make_model(graph, producer_name='argmax_test')
+
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [a_np1], target, ctx, b_np.shape, b_np.dtype)
+        np.testing.assert_allclose(b_np, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_forward_arg_min_max():
+    '''Verify argmin and argmax'''
+    verify_argmin([3,4,4])
+    verify_argmax([3,4,4])
+    verify_argmin([3,4,4], axis=1)
+    verify_argmax([3,4,4], axis=0)
+    verify_argmin([3,4,4], keepdims=0)
+    verify_argmax([3,4,4], keepdims=1)
+    for axis in [0,1,2]:
+        for keepdims in [True,False]:
+            verify_argmin([3,4,4], axis, keepdims)
+            verify_argmax([3,4,4], axis, keepdims)
+
+def verify_constantfill(is_shape, input_dim, out_dim, value, dtype, **kwargs):
+    input_a = np.random.uniform(size=input_dim).astype(dtype)
+    out = np.empty(shape=out_dim, dtype=dtype)
+    out.fill(value)
+
+    if is_shape == True:
+        fill_node = helper.make_node("ConstantFill", [], ["out"], shape=input_dim, value=value, **kwargs)
+    else:
+        fill_node = helper.make_node("ConstantFill", ["input_a"], ["out"], value=value, dtype=dtype, **kwargs)
+
+    graph = helper.make_graph([fill_node],
+                              "fill_test",
+                              inputs = [helper.make_tensor_value_info("input_a",
+                                            TensorProto.FLOAT, list(input_dim))],
+                              outputs = [helper.make_tensor_value_info("out",
+                                            TensorProto.FLOAT, list(out.shape))])
+
+    model = helper.make_model(graph, producer_name='fill_test')
+
+    for target, ctx in ctx_list():
+        if is_shape == True:
+            tvm_out = get_tvm_output(model, [], target, ctx, out.shape)
+        else:
+            tvm_out = get_tvm_output(model, [input_a], target, ctx, out.shape)
+
+        np.testing.assert_allclose(out, tvm_out, rtol=1e-5, atol=1e-5)
+
+def test_constantfill():
+    verify_constantfill(True, (2, 3, 4, 5), (2, 3, 4, 5), 10, 'float32')
+    verify_constantfill(False, (2, 3, 4, 5), (2, 3, 4, 5), 10, 'float32')
+    verify_constantfill(True, (2, 3, 4, 5), (2, 3, 4, 5, 4, 5, 6), 10, 'float32', extra_shape=(4, 5, 6))
 
 if __name__ == '__main__':
     # verify_super_resolution_example()
@@ -445,3 +730,10 @@ if __name__ == '__main__':
     test_gather()
     test_lrn()
     test_upsample()
+    test_forward_min()
+    test_forward_max()
+    test_forward_mean()
+    test_forward_hardsigmoid()
+    test_forward_arg_min_max()
+    test_softmax()
+    test_constantfill()

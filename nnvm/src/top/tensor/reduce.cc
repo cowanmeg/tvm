@@ -3,6 +3,9 @@
  * \file reduce.cc
  * \brief reduce operator.
  */
+// Enforce TOPI to use old behavior that reduces to at least 1d
+#define TOPI_REDUCE_ATLEAST1D 1
+
 #include <nnvm/op.h>
 #include <nnvm/node.h>
 #include <nnvm/op_attr_types.h>
@@ -16,6 +19,8 @@
 #include "topi/elemwise.h"
 #include "topi/reduction.h"
 #include "topi/transform.h"
+
+static_assert(TOPI_REDUCE_ATLEAST1D, "need to use legacy reduce behavior");
 
 namespace nnvm {
 namespace top {
@@ -67,10 +72,11 @@ inline TShape ReduceShapeImpl(const TShape& ishape,
   if (r_axes.ndim() == indim)
     return TShape(keepdims ? indim : 1);
 
+  CHECK(r_axes.ndim() < indim);
   if (keepdims) {
     TShape oshape(ishape);
     for (unsigned i = 0, j = 0; i < indim; ++i) {
-      if (i != r_axes[j]) continue;
+      if (j >= r_axes.ndim() || i != r_axes[j]) continue;
       oshape[i] = 1;
       ++j;
     }
@@ -79,7 +85,7 @@ inline TShape ReduceShapeImpl(const TShape& ishape,
 
   TShape oshape(indim - r_axes.ndim());
   for (unsigned i = 0, j = 0, k = 0; i < indim; ++i) {
-    if (i == r_axes[j]) {
+    if (j < r_axes.ndim() && i == r_axes[j]) {
       ++j;
       continue;
     }
@@ -95,7 +101,7 @@ inline bool ReduceShape(const nnvm::NodeAttrs& attrs,
   CHECK_EQ(out_attrs->size(), 1U);
   if ((*in_attrs)[0].ndim() == 0) return false;
   const ReduceParam& param = nnvm::get<ReduceParam>(attrs.parsed);
-  NNVM_ASSIGN_INPUT_SHAPE(
+  NNVM_ASSIGN_OUTPUT_SHAPE(
       attrs, *out_attrs, 0,
       ReduceShapeImpl((*in_attrs)[0], param.axis,
                       param.keepdims, param.exclude));
@@ -320,6 +326,70 @@ values over a given axis.
     auto axis = ShapeToArray(r_axes);
     return Array<Tensor>{
       topi::argmin(inputs[0], axis, param.keepdims) };
+});
+
+NNVM_REGISTER_REDUCE_OP(mean)
+  .describe(R"code(Computes the mean of array elements over given axes.
+
+Example::
+
+  data = [[[1,2],[2,3],[1,3]],
+          [[1,4],[4,3],[5,2]],
+          [[7,1],[7,2],[7,3]]]
+
+  mean(data)
+  [3.22]
+
+  mean(data, axis=[1,2])
+  [ 2.  3.16666667  4.5]
+
+)code" NNVM_ADD_FILELINE)
+.set_attr<FTVMCompute>(
+  "FTVMCompute", [](const NodeAttrs& attrs,
+                    const Array<Tensor>& inputs,
+                    const Array<Tensor>& out_info) {
+    const ReduceParam& param = nnvm::get<ReduceParam>(attrs.parsed);
+    TShape r_axes = GetReduceAxes(inputs[0]->shape.size(),
+                                  param.axis, param.exclude);
+    if (!r_axes.ndim()) return Array<Tensor> { topi::identity(inputs[0]) };
+    auto axis = ShapeToArray(r_axes);
+
+    Expr count = make_const(inputs[0]->dtype, 1);
+    for (auto& i : r_axes) {
+      count *= inputs[0]->shape[i];
+    }
+
+    return Array<Tensor>{
+      topi::divide(topi::sum(inputs[0], axis, param.keepdims), count) };
+});
+
+NNVM_REGISTER_REDUCE_OP(prod)
+  .describe(R"code(Computes the products of array elements over given axes.
+
+Example::
+
+  data = [[[1,2],[2,3],[1,3]],
+          [[1,4],[4,3],[5,2]],
+          [[7,1],[7,2],[7,3]]]
+
+  mean(data, axis=1)
+  [35562240]
+
+  mean(data, axis=[1,2])
+  [ 36  480  2058]
+
+)code" NNVM_ADD_FILELINE)
+.set_attr<FTVMCompute>(
+  "FTVMCompute", [](const NodeAttrs& attrs,
+                    const Array<Tensor>& inputs,
+                    const Array<Tensor>& out_info) {
+    const ReduceParam& param = nnvm::get<ReduceParam>(attrs.parsed);
+    TShape r_axes = GetReduceAxes(inputs[0]->shape.size(),
+                                  param.axis, param.exclude);
+    if (!r_axes.ndim()) return Array<Tensor> { topi::identity(inputs[0]) };
+    auto axis = ShapeToArray(r_axes);
+    return Array<Tensor>{
+      topi::prod(inputs[0], axis, param.keepdims) };
 });
 
 

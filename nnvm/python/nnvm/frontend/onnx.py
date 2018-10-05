@@ -529,6 +529,127 @@ class LRN(OnnxOpConverter):
         return _sym.lrn(inputs[0], size=nsize, axis=axis,
                         alpha=alpha, beta=beta, bias=bias)
 
+class Maximum(OnnxOpConverter):
+    """ Operator converter for Maximum.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        if not isinstance(inputs, list) or len(inputs) < 2:
+            raise ValueError("Expect minimum 2 inputs")
+        _max = inputs[0]
+        for i in range(1, len(inputs)):
+            _max = AttrCvt(op_name='broadcast_max')([_max, inputs[i]], {})
+        return _max
+
+class Minimum(OnnxOpConverter):
+    """ Operator converter for Minimum.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        if not isinstance(inputs, list) or len(inputs) < 2:
+            raise ValueError("Expect minimum 2 inputs")
+        _min = inputs[0]
+        for i in range(1, len(inputs)):
+            _min = AttrCvt(op_name='broadcast_min')([_min, inputs[i]], {})
+        return _min
+
+class Mean(OnnxOpConverter):
+    """ Operator converter for Mean.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        if not isinstance(inputs, list) or len(inputs) < 2:
+            raise ValueError("Expect minimum 2 inputs")
+        count = len(inputs)
+        _sum = inputs[0]
+        for i in range(1, count):
+            _sum = AttrCvt(op_name='broadcast_add')([_sum, inputs[i]], {})
+        return _sum / count
+
+class HardSigmoid(OnnxOpConverter):
+    """ Operator converter for HardSigmoid.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        alpha = attr.get('alpha', 0.2)
+        beta = attr.get('beta', 0.5)
+        transformX = (inputs[0] * alpha) + beta
+        attr = {'a_min':0, 'a_max':1}
+        return AttrCvt(op_name='clip')([transformX], attr)
+
+class ArgMax(OnnxOpConverter):
+    """ Operator converter for ArgMax.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        axis = attr.get('axis', 0)
+        keepdims = attr.get('keepdims', True)
+        attr = {'axis':axis, 'keepdims':keepdims}
+        return AttrCvt(op_name='argmax')(inputs, attr)
+
+class ArgMin(OnnxOpConverter):
+    """ Operator converter for ArgMin.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        axis = attr.get('axis', 0)
+        keepdims = attr.get('keepdims', True)
+        attr = {'axis':axis, 'keepdims':keepdims}
+        return AttrCvt(op_name='argmin')(inputs, attr)
+
+class Softmax(OnnxOpConverter):
+    """ Operator converter for Softmax.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        # set default value when axis is not set in the model
+        if 'axis' not in attr:
+            attr['axis'] = 1
+        return AttrCvt(
+            op_name='softmax',
+            transforms={
+                'axis': ('axis', 1),
+            })(inputs, attr, params)
+
+class ConstantFill(OnnxOpConverter):
+    """ Operator converter for ConstantFill.
+    """
+    @classmethod
+    def _impl_v1(cls, inputs, attr, params):
+        is_full = True
+        num_inputs = len(inputs)
+        if 'shape' in attr:
+            if num_inputs > 0:
+                raise ImportError(
+                    "Can't set shape and input tensor at a time")
+            shape = attr.pop('shape')
+        else:
+            if num_inputs == 0:
+                raise ImportError(
+                    "Either shape attribute or input should be set")
+            if 'input_as_shape' in attr and attr['input_as_shape']:
+                shape = params[inputs[0].list_output_names()[0]].asnumpy()
+            else:
+                is_full = False
+
+        if not is_full:
+            if 'extra_shape' in attr:
+                raise ImportError(
+                    "Extra Shape not supported with fill_like")
+
+            out = AttrCvt(
+                op_name='full_like',
+                transforms={'value': 'fill_value'},
+                ignores=['dtype'])(inputs, attr)
+            return _sym.cast(out, dtype=attr['dtype'].decode("utf-8"))
+        else:
+            if 'extra_shape' in attr:
+                shape = shape + attr.pop('extra_shape')
+
+            return AttrCvt(
+                op_name='full',
+                transforms={'value': 'fill_value'},
+                extras={'shape':shape})(inputs, attr)
 
 # compatible operators that do NOT require any conversion.
 _identity_list = []
@@ -547,7 +668,7 @@ def _get_convert_map(opset):
         'ThresholdedRelu': ThresholdedRelu.get_converter(opset),
         'ScaledTanh': ScaledTanh.get_converter(opset),
         'ParametricSoftplus': ParametricSoftPlus.get_converter(opset),
-        # 'ConstantFill'
+        'ConstantFill': ConstantFill.get_converter(opset),
         # 'GivenTensorFill'
         'FC': AttrCvt('dense', ignores=['axis', 'axis_w']),
         'Scale': Scale.get_converter(opset),
@@ -557,7 +678,6 @@ def _get_convert_map(opset):
         # 'MeanVarianceNormalization'
         # 'Crop'
         # 'Embedding'
-        # 'Upsample'
         'Upsample' : Upsample.get_converter(opset),
         'SpatialBN': BatchNorm.get_converter(opset),
 
@@ -591,14 +711,14 @@ def _get_convert_map(opset):
         'Pow': Renamer('broadcast_pow'),
         'PRelu': Prelu.get_converter(opset),
         'Sigmoid': Renamer('sigmoid'),
-        # 'HardSigmoid'
-        # 'Max' : this is the elemwise maximum
-        # 'Min' : this is the elemwise minimum
+        'HardSigmoid': HardSigmoid.get_converter(opset),
+        'Max': Maximum.get_converter(opset),
+        'Min': Minimum.get_converter(opset),
         'Sum': Sum.get_converter(opset),
-        # 'Mean'
+        'Mean': Mean.get_converter(opset),
         'Clip': AttrCvt('clip', transforms={'min': 'a_min', 'max': 'a_max'}),
         # softmax default axis is different in onnx
-        'Softmax': AttrCvt('softmax', {'axis': ('axis', 1)}),
+        'Softmax': Softmax.get_converter(opset),
         'LogSoftmax': AttrCvt('log_softmax', {'axis': ('axis', 1)}),
         # 'Hardmax'
         'Softsign': Softsign.get_converter(opset),
@@ -627,8 +747,8 @@ def _get_convert_map(opset):
         # 'ReduceMean'
         # 'ReduceProd'
         # 'ReduceLogSumExp'
-        # 'ArgMax'
-        # 'ArgMin'
+        'ArgMax': ArgMax.get_converter(opset),
+        'ArgMin': ArgMin.get_converter(opset),
 
         # defs/tensor
         'Cast': Cast.get_converter(opset),
@@ -638,7 +758,7 @@ def _get_convert_map(opset):
         'Slice': Slice.get_converter(opset),
         'Transpose': AttrCvt('transpose', {'perm': 'axes'}),
         'Gather': Gather.get_converter(opset),
-        'Squeeze': Renamer('squeeze'),
+        'Squeeze': AttrCvt('squeeze', {'axes': 'axis'}),
         'Unsqueeze': Unsqueeze.get_converter(opset),
         'Pad': Pad.get_converter(opset),
         'Shape': Shape.get_converter(opset),

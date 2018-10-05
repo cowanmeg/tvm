@@ -7,7 +7,6 @@
 #define TVM_EXPR_H_
 
 #include <ir/Expr.h>
-#include <ir/IROperator.h>
 #include <ir/IRPrinter.h>
 #include <string>
 #include <algorithm>
@@ -33,14 +32,6 @@ using HalideIR::IR::FunctionBaseNode;
 using HalideIR::Internal::Stmt;
 using HalideIR::Internal::IRPrinter;
 using HalideIR::Internal::Variable;
-
-using HalideIR::Internal::make_const;
-using HalideIR::Internal::make_zero;
-using HalideIR::Internal::as_const_int;
-using HalideIR::Internal::as_const_uint;
-using HalideIR::Internal::const_true;
-using HalideIR::Internal::const_false;
-using HalideIR::Internal::is_no_op;
 
 inline Type TVMShapeIndexType() {
   if (std::is_signed<tvm_index_t>::value) {
@@ -75,7 +66,7 @@ class Var : public HalideIR::VarExpr {
  public:
   EXPORT explicit Var(const std::string& name_hint = "v",
                Type t = Int(32)) : VarExpr(name_hint, t) {}
-  explicit Var(std::shared_ptr<Node> n) : VarExpr(n) {}
+  explicit Var(NodePtr<Node> n) : VarExpr(n) {}
   explicit Var(VarExpr v) : VarExpr(v) {}
   /*!
    * \brief Make a new copy of var with same type, append suffix
@@ -106,7 +97,7 @@ class Range : public HalideIR::IR::Range {
  public:
   /*! \brief constructor */
   Range() {}
-  explicit Range(std::shared_ptr<Node> n) : HalideIR::IR::Range(n) {}
+  explicit Range(NodePtr<Node> n) : HalideIR::IR::Range(n) {}
   /*!
    * \brief constructor by begin and end
    * \param begin The begin of the range.
@@ -196,7 +187,7 @@ class IterVar : public NodeRef {
   // construct a new iter var without a domain
   IterVar() {}
   // construct from shared ptr.
-  explicit IterVar(std::shared_ptr<Node> n) : NodeRef(n) {}
+  explicit IterVar(NodePtr<Node> n) : NodeRef(n) {}
   /*!
    * \brief access the internal node container
    * \return the pointer to the internal node container
@@ -230,6 +221,13 @@ using Domain = Array<Range>;
 
 // print functions for expr
 TVM_DLL std::ostream& operator<<(std::ostream& os, const NodeRef& n);  // NOLINT(*)
+
+/*!
+ * \brief Dump the node to stderr, used for debug purposes.
+ * \param node The input node
+ */
+TVM_DLL void Dump(const NodeRef& node);
+
 // definition of Node.
 /*!
  * \brief An iteration variable representing an iteration

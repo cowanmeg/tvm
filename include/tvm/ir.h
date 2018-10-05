@@ -28,7 +28,7 @@ struct CommReducerNode;
 
 struct CommReducer : public NodeRef {
   CommReducer() {}
-  explicit CommReducer(std::shared_ptr<Node> n) : NodeRef(n) {}
+  explicit CommReducer(NodePtr<Node> n) : NodeRef(n) {}
   /*!
    * \brief access the internal node container
    * \return the pointer to the internal node container
@@ -495,8 +495,6 @@ using HalideIR::Internal::Block;
 using HalideIR::Internal::IfThenElse;
 using HalideIR::Internal::Evaluate;
 using HalideIR::Internal::Shuffle;
-// ir functions
-using HalideIR::Internal::is_const_power_of_two_integer;
 
 /*!
  * \brief Create a type annotation expression

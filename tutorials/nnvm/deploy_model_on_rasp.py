@@ -88,7 +88,7 @@ block = get_model('resnet18_v1', pretrained=True)
 ######################################################################
 # In order to test our model, here we download an image of cat and
 # transform its format.
-img_name = 'cat.jpg'
+img_name = 'cat.png'
 download('https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true', img_name)
 image = Image.open(img_name).resize((224, 224))
 
@@ -128,7 +128,6 @@ batch_size = 1
 num_classes = 1000
 image_shape = (3, 224, 224)
 data_shape = (batch_size,) + image_shape
-out_shape = (batch_size, num_classes)
 
 ######################################################################
 # Compile The Graph
@@ -156,7 +155,7 @@ else:
     # The above line is a simple form of
     # target = tvm.target.create('llvm -devcie=arm_cpu -model=bcm2837 -target=armv7l-linux-gnueabihf -mattr=+neon')
 
-with nnvm.compiler.build_config(opt_level=2, add_pass=['AlterOpLayout']):
+with nnvm.compiler.build_config(opt_level=3):
     graph, lib, params = nnvm.compiler.build(
         net, target, shape={"data": data_shape}, params=params)
 
@@ -188,20 +187,17 @@ else:
 remote.upload(lib_fname)
 rlib = remote.load_module('net.tar')
 
-# upload the parameter (this may take a while)
-ctx = remote.cpu(0)
-rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
-
 # create the remote runtime module
+ctx = remote.cpu(0)
 module = runtime.create(graph, rlib, ctx)
-# set parameter
-module.set_input(**rparams)
+# set parameter (upload params to the remote device. This may take a while)
+module.set_input(**params)
 # set input data
 module.set_input('data', tvm.nd.array(x.astype('float32')))
 # run
 module.run()
 # get output
-out = module.get_output(0, tvm.nd.empty(out_shape, ctx=ctx))
+out = module.get_output(0)
 # get top1 result
 top1 = np.argmax(out.asnumpy())
 print('TVM prediction top-1: {}'.format(synset[top1]))

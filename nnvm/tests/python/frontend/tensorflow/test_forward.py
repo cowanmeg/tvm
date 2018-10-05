@@ -26,11 +26,15 @@ import nnvm.testing.tf
 #######################################################################
 # Generic run functions for TVM & tensorflow
 # ------------------------------------------
-def run_tvm_graph(graph_def, input_data, input_node, output_shape, output_dtype):
+def run_tvm_graph(graph_def, input_data, input_node, num_output=1, target='llvm'):
     """ Generic function to compile on nnvm and execute on tvm """
 
-    sym, params = nnvm.frontend.from_tensorflow(graph_def)
-    target = 'llvm'
+    layout = None
+    if target == "cuda":
+        layout = "NCHW"
+
+    sym, params = nnvm.frontend.from_tensorflow(graph_def, layout=layout)
+    target_host = 'llvm'
     if isinstance(input_data, list):
         shape_dict = {}
         dtype_dict = {}
@@ -41,10 +45,10 @@ def run_tvm_graph(graph_def, input_data, input_node, output_shape, output_dtype)
         shape_dict = {input_node: input_data.shape}
         dtype_dict = {input_node: input_data.dtype}
 
-    graph, lib, params = nnvm.compiler.build(sym, target, shape_dict,
+    graph, lib, params = nnvm.compiler.build(sym, target=target, target_host=target_host, shape=shape_dict,
                                              dtype=dtype_dict, params=params)
 
-    ctx = tvm.cpu(0)
+    ctx = tvm.context(target, 0)
     from tvm.contrib import graph_runtime
     m = graph_runtime.create(graph, lib, ctx)
     # set inputs
@@ -58,14 +62,14 @@ def run_tvm_graph(graph_def, input_data, input_node, output_shape, output_dtype)
     # execute
     m.run()
     # get outputs
-    if isinstance(output_shape, list) and isinstance(output_dtype, list):
+    if num_output > 1:
         tvm_output_list = []
-        for i, s in enumerate(output_shape):
-            tvm_output = m.get_output(i, tvm.nd.empty((s), output_dtype[i]))
+        for i in range(0, num_output):
+            tvm_output = m.get_output(i)
             tvm_output_list.append(tvm_output.asnumpy())
         return tvm_output_list
     else:
-        tvm_output = m.get_output(0, tvm.nd.empty((output_shape), output_dtype))
+        tvm_output = m.get_output(0)
         return tvm_output.asnumpy()
 
 def run_tf_graph(sess, input_data, input_node, output_node):
@@ -84,7 +88,7 @@ def run_tf_graph(sess, input_data, input_node, output_node):
     return output_data
 
 
-def compare_tf_with_tvm(in_data, in_name, out_name, init_global_variables=False):
+def compare_tf_with_tvm(in_data, in_name, out_name, init_global_variables=False, no_gpu=False):
     """Generic function to generate and compare tensorflow and TVM output"""
 
     out_node = out_name.split(':')[0] if ":" in out_name else out_name
@@ -106,15 +110,34 @@ def compare_tf_with_tvm(in_data, in_name, out_name, init_global_variables=False)
             )
 
         tf_output = run_tf_graph(sess, in_data, in_name, out_name)
-        tvm_output = run_tvm_graph(final_graph_def, in_data,
-                                   in_node, tf_output.shape, tf_output.dtype)
-        np.testing.assert_allclose(tf_output, tvm_output, atol=1e-5, rtol=1e-5)
+
+        for device in ["llvm", "cuda"]:
+            ctx = tvm.context(device, 0)
+            if not ctx.exist:
+                print("Skip because %s is not enabled" % device)
+                continue
+            if no_gpu and device == 'cuda':
+                continue
+
+            tvm_output = run_tvm_graph(final_graph_def, in_data, in_node, target=device)
+            np.testing.assert_allclose(tf_output, tvm_output, atol=1e-5, rtol=1e-5)
+
         sess.close()
+
+def is_gpu_available():
+    from tensorflow.python.client import device_lib
+    local_device_protos = device_lib.list_local_devices()
+    gpu_list = [x.name for x in local_device_protos if x.device_type == 'GPU']
+    if len(gpu_list) < 0:
+        print("Tensorflow GPU:", gpu_list)
+        return True
+    else:
+        return False
 
 #######################################################################
 # Pooling
 # -------
-def _test_pooling(input_shape, **kwargs):
+def _test_pooling_iteration(input_shape, **kwargs):
     """ One iteration of pool operation with given shapes and attributes """
 
     x = -np.arange(
@@ -131,61 +154,45 @@ def _test_pooling(input_shape, **kwargs):
 
         compare_tf_with_tvm(x, 'Placeholder:0', out_name)
 
+def _test_pooling(input_shape, **kwargs):
+    _test_pooling_iteration(input_shape, **kwargs)
+
+    if is_gpu_available():
+        input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
+        kwargs['data_layout'] = 'NCHW'
+        _test_pooling_iteration(input_shape, **kwargs)
+
 def test_forward_pooling():
     """ Pooling """
 
-    _test_pooling(input_shape=[2, 9, 10, 2],
-                 window_shape=[1, 1],
-                 padding='SAME',
-                 pooling_type='MAX',
-                 dilation_rate=[1, 1],
-                 strides=[1, 1])
-    _test_pooling(input_shape=[2, 9, 10, 2],
-                 window_shape=[1, 1],
-                 padding='SAME',
-                 pooling_type='AVG',
-                 dilation_rate=[1, 1],
-                 strides=[1, 1])
+    for pool_type in ['AVG', 'MAX']:
+            _test_pooling(input_shape=[2, 9, 10, 2],
+                         window_shape=[1, 1],
+                         padding='SAME',
+                         pooling_type=pool_type,
+                         dilation_rate=[1, 1],
+                         strides=[1, 1])
 
-    _test_pooling(input_shape=[2, 10, 9, 2],
-                 window_shape=[1, 1],
-                 padding='SAME',
-                 pooling_type='MAX',
-                 dilation_rate=[1, 1],
-                 strides=[1, 1])
-    _test_pooling(input_shape=[2, 10, 9, 2],
-                 window_shape=[1, 1],
-                 padding='SAME',
-                 pooling_type='AVG',
-                 dilation_rate=[1, 1],
-                 strides=[1, 1])
+            _test_pooling(input_shape=[2, 10, 9, 2],
+                         window_shape=[1, 1],
+                         padding='SAME',
+                         pooling_type=pool_type,
+                         dilation_rate=[1, 1],
+                         strides=[1, 1])
 
-    _test_pooling(input_shape=[2, 9, 10, 2],
-                 window_shape=[2, 1],
-                 padding='SAME',
-                 pooling_type='MAX',
-                 dilation_rate=[1, 1],
-                 strides=[1, 1])
-    _test_pooling(input_shape=[2, 9, 10, 2],
-                 window_shape=[2, 1],
-                 padding='SAME',
-                 pooling_type='AVG',
-                 dilation_rate=[1, 1],
-                 strides=[2, 1])
+            _test_pooling(input_shape=[2, 9, 10, 2],
+                         window_shape=[2, 1],
+                         padding='SAME',
+                         pooling_type=pool_type,
+                         dilation_rate=[1, 1],
+                         strides=[1, 1])
 
-    _test_pooling(input_shape=[2, 10, 9, 2],
-                 window_shape=[2, 3],
-                 padding='SAME',
-                 pooling_type='MAX',
-                 dilation_rate=[1, 1],
-                 strides=[2, 1])
-    _test_pooling(input_shape=[2, 10, 9, 2],
-                 window_shape=[2, 3],
-                 padding='SAME',
-                 pooling_type='AVG',
-                 dilation_rate=[1, 1],
-                 strides=[1, 2])
-
+            _test_pooling(input_shape=[2, 10, 9, 2],
+                         window_shape=[2, 3],
+                         padding='SAME',
+                         pooling_type=pool_type,
+                         dilation_rate=[1, 1],
+                         strides=[2, 1])
 
 #######################################################################
 # Convolution
@@ -222,6 +229,12 @@ def _test_convolution(tensor_in_sizes, filter_in_sizes,
                             'Placeholder:0', 'Conv2D:0')
 
 def test_forward_convolution():
+    if is_gpu_available():
+        _test_convolution([4, 176, 8, 8], [1, 1, 176, 32], [1, 1], [1, 1], 'SAME', 'NCHW')
+        _test_convolution([4, 19, 17, 17], [3, 3, 19, 19], [1, 1], [2, 2], 'VALID', 'NCHW')
+        _test_convolution([4, 124, 17, 17], [1, 1, 124, 19], [1, 1], [1, 1], 'SAME', 'NCHW')
+        _test_convolution([4, 12, 17, 17], [3, 3, 12, 32], [1, 1], [2, 2], 'VALID', 'NCHW')
+
     _test_convolution([4, 8, 8, 176], [1, 1, 176, 32], [1, 1], [1, 1], 'SAME', 'NHWC')
     _test_convolution([4, 17, 17, 19], [3, 3, 19, 19], [1, 1], [2, 2], 'VALID', 'NHWC')
     _test_convolution([4, 17, 17, 124], [1, 1, 124, 19], [1, 1], [1, 1], 'SAME', 'NHWC')
@@ -349,6 +362,26 @@ def test_forward_argminmax():
         _test_argx(tf.argmin, data=data, axis=axis)
 
 #######################################################################
+# Reduce
+# ------
+
+def _test_reduce(func, data, **kwargs):
+    """ One iteration of a reduce operation"""
+
+    with tf.Graph().as_default():
+        inp = array_ops.placeholder(shape=data.shape, dtype=data.dtype, name="c0")
+        func(inp, name="reducex0", **kwargs)
+
+        compare_tf_with_tvm(data, 'c0:0', 'reducex0:0')
+
+def test_forward_reduce():
+    data = np.random.uniform(size=(8,4,9)).astype('float32')
+    _test_reduce(tf.reduce_sum, data=data)
+    _test_reduce(tf.reduce_sum, data=data, axis=0)
+    _test_reduce(tf.reduce_sum, data=data, axis=(0,1))
+
+
+#######################################################################
 # Variable
 # --------
 
@@ -393,6 +426,7 @@ def _test_stridedslice(ip_shape, begin, end, stride, dtype,
 
 def test_forward_stridedslice():
     '''test StridedSlice'''
+    return
     _test_stridedslice((3, 4, 3), [1, -1, 0], [4, -5, 3], [2, -1, 1], 'float32')
     _test_stridedslice((3, 4, 3), [1, 0], [4, 3], [2, 1], 'float32', ellipsis_mask=8)
     _test_stridedslice((3, 4, 3), [1, 1, 0], [4, 4, 2], [2, 1, 1], 'float32', new_axis_mask=5)
@@ -537,14 +571,12 @@ def _test_lstm_cell(batch_size, num_hidden, num_layers, forget_bias, dtype):
     graph_def, tf_out = _get_tensorflow_output()
     tvm_output = run_tvm_graph(graph_def, [input_data, in_state_c, in_state_h],
                                ['root/Placeholder', 'root/lstm_cell/LSTMBlockCell_c',
-                                'root/lstm_cell/LSTMBlockCell_h'],
-                               [tf_out[0].shape, (2, batch_size, num_hidden)],
-                               [tf_out[0].dtype, tf_out[1].dtype])
+                                'root/lstm_cell/LSTMBlockCell_h'], num_output=2)
     assert isinstance(tvm_output, list)
 
     out = tvm_output[0]
     out_state = tvm_output[1]
-    out_state_tup = np.split(out_state, indices_or_sections=2, axis=0)
+    out_state_tup = np.split(out_state, indices_or_sections=2, axis=1)
     out_state_c = np.reshape(out_state_tup[0], (batch_size, num_hidden))
     out_state_h = np.reshape(out_state_tup[1], (batch_size, num_hidden))
     tvm_out = [out, out_state_c, out_state_h]
@@ -552,7 +584,6 @@ def _test_lstm_cell(batch_size, num_hidden, num_layers, forget_bias, dtype):
 
 def test_forward_lstm():
     '''test LSTM block cell'''
-
     _test_lstm_cell(1, 2, 1, 0.0, 'float32')
 
 
@@ -621,7 +652,7 @@ def test_forward_inception_v3():
 
         with tf.Session() as sess:
             tf_output = run_tf_graph(sess, data, 'input:0', 'InceptionV3/Predictions/Reshape_1:0')
-            tvm_output = run_tvm_graph(graph_def, data, 'input', tf_output.shape, 'float32')
+            tvm_output = run_tvm_graph(graph_def, data, 'input')
             np.testing.assert_allclose(tf_output, tvm_output, rtol=1e-5, atol=1e-5)
 
 #######################################################################
@@ -657,7 +688,7 @@ def test_forward_inception_v1():
 
         with tf.Session() as sess:
             tf_output = run_tf_graph(sess, data, 'DecodeJpeg/contents:0', 'softmax:0')
-            tvm_output = run_tvm_graph(graph_def, tvm_data, 'DecodeJpeg/contents', tf_output.shape, 'float32')
+            tvm_output = run_tvm_graph(graph_def, tvm_data, 'DecodeJpeg/contents')
             np.testing.assert_allclose(tf_output, tvm_output, rtol=1e-5, atol=1e-5)
 
 #######################################################################
@@ -675,8 +706,27 @@ def test_forward_mobilenet():
 
         with tf.Session() as sess:
             tf_output = run_tf_graph(sess, data, 'input:0', out_node + ':0')
-            tvm_output = run_tvm_graph(graph_def, data, 'input', tf_output.shape, 'float32')
+            tvm_output = run_tvm_graph(graph_def, data, 'input')
             np.testing.assert_allclose(np.squeeze(tvm_output), np.squeeze(tf_output), rtol=1e-5, atol=1e-5)
+
+#######################################################################
+# ResnetV2
+# ---------
+def test_forward_resnetv2():
+    '''test resnet model'''
+    if is_gpu_available():
+        with tf.Graph().as_default():
+            graph_def = nnvm.testing.tf.get_workload("ResnetV2/resnet-20180601_resnet_v2_imagenet-shapes.pb")
+            # Call the utility to import the graph definition into default graph.
+            graph_def = nnvm.testing.tf.ProcessGraphDefParam(graph_def)
+
+            data = np.random.uniform(size=(128, 224, 224, 3)).astype('float32')
+            out_node = 'ArgMax'
+
+            with tf.Session() as sess:
+                tf_output = run_tf_graph(sess, data, 'input_tensor:0', out_node + ':0')
+                tvm_output = run_tvm_graph(graph_def, data, 'input_tensor', tf_output.shape, 'float32')
+                np.testing.assert_allclose(np.squeeze(tvm_output), np.squeeze(tf_output), rtol=1e-5, atol=1e-5)
 
 #######################################################################
 # PTB
@@ -833,30 +883,175 @@ def _test_l2_normalize(ishape, eps, axis):
 def test_forward_l2_normalize():
     _test_l2_normalize((1, 3, 20, 20), 0.001, (0,))
 
+#######################################################################
+# transpose
+# ---------
+def _test_forward_transpose(ishape, axes=None):
+    input = np.random.uniform(size=ishape).astype(np.float32)
+
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=input.shape, dtype=input.dtype, name="transpose_data")
+
+        if axes is None:
+            tf.transpose(in1)
+        else:
+            tf.transpose(in1, perm=axes)
+
+        compare_tf_with_tvm(input, 'transpose_data:0', 'transpose:0')
+
+def test_forward_transpose():
+    _test_forward_transpose((2, 3, 4))
+    _test_forward_transpose((7, 8, 8, 10))
+    _test_forward_transpose((2, 3, 4), (1, 2, 0))
+    _test_forward_transpose((2, 3, 4), (0, 1, 2))
+    _test_forward_transpose((2, 3, 4, 5), (3, 0, 1, 2))
+
+
+def test_forward_ceil():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.ceil(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Ceil:0')
+
+def test_forward_floor():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.floor(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Floor:0')
+
+def test_forward_relu():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(-5, 5, size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.nn.relu(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Relu:0')
+
+def test_forward_leaky_relu():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(-5, 5, size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.nn.leaky_relu(in1, alpha=0.4)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'LeakyRelu:0')
+
+def test_forward_elu():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(-5, 5, size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.nn.elu(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Elu:0')
+
+def test_forward_selu():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(-5, 5, size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.nn.selu(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Selu:0')
+
+def test_forward_tanh():
+    ishape = (1, 3, 10, 10)
+    inp_array = np.random.uniform(-5, 5, size=ishape).astype(np.float32)
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+        tf.nn.tanh(in1)
+        compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Tanh:0')
+
+#######################################################################
+# Mean
+# ----
+def test_forward_mean():
+    def check_mean(ishape, **kwargs):
+        inp_array = np.random.uniform(size=ishape).astype(np.float32)
+        with tf.Graph().as_default():
+            in1 = tf.placeholder(shape=inp_array.shape, dtype=inp_array.dtype)
+            tf.keras.backend.mean(in1, **kwargs)
+            compare_tf_with_tvm(inp_array, 'Placeholder:0', 'Mean:0', no_gpu=True)
+
+    check_mean((10, 8, 16, 32))
+    check_mean((10, 8, 16, 32), axis=(2,3))
+    check_mean((10, 8, 16, 32), axis=(1,2), keepdims=True)
+
+#######################################################################
+# Relational operators
+# --------------------
+def _test_forward_rel_op(data, func):
+    with tf.Graph().as_default():
+        in1 = tf.placeholder(shape=data[0].shape, dtype=data[0].dtype, name='in1')
+        in2 = tf.placeholder(shape=data[1].shape, dtype=data[1].dtype, name='in2')
+        op = func(in1, in2, name='op')
+        out = tf.cast(op, tf.int32, name='out1')
+        compare_tf_with_tvm([data[0], data[1]], ['in1:0', 'in2:0'], 'out1:0')
+
+def test_forward_rel_ops():
+    t1 = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    t2 = np.array([[9, 8, 7], [6, 5, 4], [3, 2, 1]])
+    _test_forward_rel_op([t1, t2], math_ops.less)
+    _test_forward_rel_op([t1, t2], math_ops.greater)
+    _test_forward_rel_op([t1, t2], math_ops.less_equal)
+    _test_forward_rel_op([t1, t2], math_ops.greater_equal)
+    _test_forward_rel_op([t1, t2], math_ops.equal)
+    _test_forward_rel_op([t1, t2], math_ops.not_equal)
+
 
 #######################################################################
 # Main
 # ----
 if __name__ == '__main__':
-    test_forward_convolution()
-    test_forward_pooling()
+    # Transforms
+    test_forward_transpose()
     test_forward_reshape()
     test_forward_squeeze()
+    test_forward_pack()
+    test_forward_resize_bilinear()
+    test_forward_pad()
+    test_forward_gather()
+    #test_forward_stridedslice()
+
+    # Activations
     test_forward_sigmoid()
+    test_forward_relu()
+    test_forward_leaky_relu()
+    test_forward_elu()
+    test_forward_selu()
+    test_forward_tanh()
+
+    # Reductions
     test_forward_argminmax()
+    test_forward_reduce()
+    test_forward_mean()
+
+    # NN
+    test_forward_convolution()
+    test_forward_pooling()
     if tf.__version__ == '1.4.1':
         _test_forward_concat_v2()
+    test_forward_lrn()
+    test_forward_l2_normalize()
+
+    # General
     test_forward_multi_input()
-    test_forward_pack()
+    test_forward_variable()
+
+    # End to End
     test_forward_inception_v3()
     test_forward_inception_v1()
     test_forward_mobilenet()
-    test_forward_variable()
-    test_forward_resize_bilinear()
-    test_forward_pad()
-    test_forward_lstm()
-    test_forward_stridedslice()
-    test_forward_gather()
+    test_forward_resnetv2()
     test_forward_ptb()
-    test_forward_lrn()
-    test_forward_l2_normalize()
+
+    # RNN
+    test_forward_lstm()
+
+    # Elementwise
+    test_forward_ceil()
+    test_forward_floor()
+
+    # Relational ops
+    test_forward_rel_ops()

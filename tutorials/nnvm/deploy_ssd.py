@@ -22,12 +22,20 @@ from mxnet.model import load_checkpoint
 
 
 ######################################################################
-# Set the parameters here
-# -----------------------
+# Preliminary and Set parameters
+# ------------------------------
+# We should build TVM with sort support, in TVM root directory
+#
+# .. code-block:: bash
+#
+#   echo "set(USE_SORT ON)" > config.mk
+#   make -j8
+#
 # .. note::
 #
 #   Currently we support compiling SSD on CPU only.
 #   GPU support is in progress.
+#
 
 model_name = "ssd_resnet50_512"
 model_file = "%s.zip" % model_name
@@ -94,8 +102,7 @@ m.set_input(**params)
 # execute
 m.run()
 # get outputs
-_, oshape = compiler.graph_util.infer_shape(graph, shape={"data": dshape})
-tvm_output = m.get_output(0, tvm.nd.empty(tuple(oshape[0]), dtype))
+tvm_output = m.get_output(0)
 
 
 ######################################################################

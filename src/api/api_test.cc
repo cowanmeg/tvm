@@ -14,6 +14,7 @@ struct TestAttrs : public AttrsNode<TestAttrs> {
   int axis;
   std::string name;
   Array<Expr> padding;
+  TypedEnvFunc<int(int)> func;
 
   TVM_DECLARE_ATTRS(TestAttrs, "attrs.TestAttrs") {
     TVM_ATTR_FIELD(axis)
@@ -26,6 +27,9 @@ struct TestAttrs : public AttrsNode<TestAttrs> {
     TVM_ATTR_FIELD(padding)
         .describe("padding of input")
         .set_default(Array<Expr>({0, 0}));
+    TVM_ATTR_FIELD(func)
+        .describe("some random env function")
+        .set_default(TypedEnvFunc<int(int)>(nullptr));
   }
 };
 
@@ -33,6 +37,16 @@ TVM_REGISTER_NODE_TYPE(TestAttrs);
 
 TVM_REGISTER_API("_nop")
 .set_body([](TVMArgs args,  TVMRetValue *ret) {
+  });
+
+TVM_REGISTER_API("_context_test")
+.set_body([](TVMArgs args,  TVMRetValue *ret) {
+    DLContext ctx = args[0];
+    int dtype = args[1];
+    int did = args[2];
+    CHECK_EQ(static_cast<int>(ctx.device_type), dtype);
+    CHECK_EQ(static_cast<int>(ctx.device_id), did);
+    *ret = ctx;
   });
 
 // internal fucntion used for debug and testing purposes

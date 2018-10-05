@@ -179,15 +179,25 @@ perf
 *.h5
 synset.txt
 cat.jpg
+cat.png
 docs.tgz
 cat.png
 *.mlmodel
+tvm_u.*
+tvm_t.*
 # Mac OS X
 .DS_Store
 build*
 
 # Jetbrain
 .idea
+.ipython
+.jupyter
+.nv
+.pylint.d
+.python_history
+.pytest_cache
+.local
 
 # tmp file
 .nfs*

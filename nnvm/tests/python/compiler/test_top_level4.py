@@ -31,15 +31,22 @@ def verify_reduce_explicit(dshape, data, result, fsym, oshape=None, otype='float
     x = sym.Variable("x")
     y = fsym(x + 0, **kwargs)
     for target, ctx in ctx_list():
+        # TODO(yuruofei): remove when cuda reduce schedule is done
+        if target == 'cuda' and fsym == sym.mean:
+            continue
         graph, lib, _ = nnvm.compiler.build(y, target, {"x": dshape})
         m = graph_runtime.create(graph, lib, ctx)
         # set input
         m.run(x=data)
         # oshape set to None means do not test the shape-correctness
-        oshape = result.shape if oshape is None else oshape
+        oshape = result.shape if isinstance(result, np.ndarray) else (1,) if oshape is None else oshape
         out = m.get_output(0, tvm.nd.empty(oshape, dtype=otype))
-        np.testing.assert_equal(out.asnumpy().shape, result.shape)
-        np.testing.assert_allclose(out.asnumpy(), result, atol=1e-5, rtol=1e-5)
+        if isinstance(result, np.ndarray):
+            np.testing.assert_equal(out.asnumpy().shape, result.shape)
+            np.testing.assert_allclose(out.asnumpy(), result, atol=1e-5, rtol=1e-5)
+        else:
+            tvm_out = out.asnumpy()
+            assert abs(result - tvm_out) <= (1e-5 + 1e-5 * abs(tvm_out))
 
 def verify_reduce(dshape, fnp, fsym, oshape=None, otype='float32', **kwargs):
     """ Verify reduce operations by generating data at random and calling numpy
@@ -89,6 +96,13 @@ def test_reduce():
     verify_reduce((4, 4, 3), np.min, sym.min, keepdims=True)
     verify_reduce((4, 4, 3), np.sum, sym.sum, axis=(0, 2))
     verify_reduce((4, 4, 3), np.sum, sym.sum)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, axis=(0, 1), keepdims=False)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, axis=(0, 2), keepdims=False)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, axis=(0, 1), keepdims=True)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, axis=(0, 2), keepdims=True)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, keepdims=True)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, keepdims=False)
+    verify_reduce((128, 24, 128), np.mean, sym.mean, axis=(0, 1, 2), keepdims=True)
 
     data = np.array([[[1,2],[3,4]],[[3,44],[5,6]]], dtype=np.float32)
     verify_reduce_explicit([2,2,2], data, np.array([[1,1],[1,0]]), sym.argmax, otype='int32', axis=[0,2], exclude=True)
@@ -99,7 +113,7 @@ def test_reduce():
             kwargs = { 'keepdims':keepdims }
             if axis is None:
                 # FIXME: NNVM doesn't support setting `axis=None` explicitly.
-                kwargs.update({'oshape': [1,1,1] if keepdims else [] })
+                kwargs.update({'oshape': [1,1,1] if keepdims else [1] })
             else:
                 kwargs.update({'axis': axis})
                 kwargs.update({'oshape': shape[:axis]+[1]+shape[axis+1:] if keepdims else shape[:axis]+shape[axis+1:]})

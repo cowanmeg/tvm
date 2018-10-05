@@ -10,6 +10,7 @@ make cython3 || exit -1
 
 # Test extern package package
 cd apps/extension
+rm -rf lib
 make || exit -1
 cd ../..
 python -m nose -v apps/extension/tests || exit -1
@@ -18,6 +19,8 @@ TVM_FFI=cython python -m nose -v tests/python/integration || exit -1
 TVM_FFI=ctypes python3 -m nose -v tests/python/integration || exit -1
 TVM_FFI=cython python -m nose -v tests/python/contrib || exit -1
 TVM_FFI=ctypes python3 -m nose -v tests/python/contrib || exit -1
+TVM_FFI=cython python -m nose -v tests/python/relay || exit -1
+TVM_FFI=ctypes python3 -m nose -v tests/python/relay || exit -1
 
 # Do not enabke OpenGL
 # TVM_FFI=cython python -m nose -v tests/webgl || exit -1

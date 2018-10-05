@@ -79,10 +79,25 @@ def _get_workload(data, kernel, stride, padding, out_dtype):
         HSTR, WSTR = stride
     else:
         HSTR, WSTR = stride, stride
-    assert data.dtype == kernel.dtype, \
+    assert (data.dtype == kernel.dtype) or (data.dtype == 'uint8' and kernel.dtype == 'int8'), \
         "Do not support inputs with different data types now. ' \
         '{} vs. {}".format(data.dtype, kernel.dtype)
     return Workload(data.dtype, out_dtype, IH, IW, CI, CO, KH, KW, HPAD, WPAD, HSTR, WSTR)
+
+def _get_workload_int8(data, kernel, stride, padding, out_dtype):
+    """ Get the workload structure. """
+    _, CI, IH, IW = [x.value for x in data.shape]
+    CO, _, KH, KW = [x.value for x in kernel.shape]
+    HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    if isinstance(stride, (tuple, list)):
+        HSTR, WSTR = stride
+    else:
+        HSTR, WSTR = stride, stride
+    assert (data.dtype == kernel.dtype) or (data.dtype == 'uint8' and kernel.dtype == 'int8'), \
+        "Do not support inputs with different data types now. ' \
+        '{} vs. {}".format(data.dtype, kernel.dtype)
+    return Workload(data.dtype, out_dtype, IH, IW, CI, CO, KH, KW, HPAD, WPAD, HSTR, WSTR)
+
 
 
 @tvm.target.generic_func
@@ -109,6 +124,17 @@ def _get_schedule(wkl):
 
 @tvm.target.generic_func
 def _get_schedule_NCHWc(wkl, layout, out_layout):
+    # pylint: disable=unreachable
+    """ Get the platform specific schedule. """
+    target = tvm.target.current_target()
+    raise RuntimeError(
+        "No schedule for current target:{}".format(target))
+    # This return has no use, merely to supress pylint warning
+    return wkl
+
+
+@tvm.target.generic_func
+def _get_schedule_NCHWc_int8(wkl, layout, out_layout):
     # pylint: disable=unreachable
     """ Get the platform specific schedule. """
     target = tvm.target.current_target()
@@ -397,3 +423,37 @@ def conv2d_winograd_without_weight_transform(input, filter, strides, padding,
         4-D with shape [batch, out_height, out_width, out_channel]
     """
     raise ValueError("missing register for topi.nn.conv2d_winograd_without_weight_transform")
+
+
+@tvm.target.generic_func
+def conv2d_NCHWc_int8_prepacked(data, kernel, stride, padding, layout, out_dtype):
+    """Convolution operator in NCHW[x]c layout for int8. Data and kernel should be packed in
+    advance.
+
+    Parameters
+    ----------
+    data : tvm.Tensor
+        5-D with shape [batch, in_channel_chunk, in_height, in_width, in_channel_block]
+
+    kernel : tvm.Tensor
+        6-D with shape [num_filter_chunk, in_channel_chunk, filter_height,
+        filter_width, num_filter_block, in_channel_block]
+
+    stride : int or a list/tuple of two ints
+        stride size, or [stride_height, stride_width]
+
+    padding: int or a list/tuple of two ints
+        padding size, or [pad_height, pad_width]
+
+    layout : str
+        layout of data
+
+    out_dtype: str
+        The output type. This is used for mixed precision.
+
+    Returns
+    -------
+    output : tvm.Tensor
+        5-D with shape [batch, out_channel_chunk, out_height, out_width, out_channel_block]
+    """
+    raise ValueError("missing register for topi.nn.conv2d_NCHWc_int8_prepacked")

@@ -226,16 +226,12 @@ inline Expr ElemOffset(const BufferNode* n, Array<Expr> index) {
   Expr base = n->elem_offset;
   if (n->strides.size() == 0) {
     CHECK_EQ(n->shape.size(), index.size());
-    if (n->shape.size() != 0) {
-      if (is_zero(base)) {
-        base = index[0];
-      } else {
-        base = base + index[0];
+    if (index.size() > 0) {
+      Expr offset = index[0];
+      for (size_t i = 1; i < index.size(); ++i) {
+        offset = MergeMulMod(offset * n->shape[i] + index[i]);
       }
-    }
-    base = MergeMulMod(base);
-    for (size_t i = 1; i < index.size(); ++i) {
-      base = MergeMulMod(base * n->shape[i] + index[i]);
+      base = base + offset;
     }
   } else {
     CHECK_EQ(n->strides.size(), index.size());
@@ -289,7 +285,7 @@ Buffer Buffer::MakeStrideView() const {
   if ((*this)->strides.size() != 0) return *this;
   if ((*this)->shape.size() == 0) return *this;
   std::vector<Expr> temp;
-  auto n = std::make_shared<BufferNode>(*operator->());
+  auto n = make_node<BufferNode>(*operator->());
   Expr acc = make_const(n->DefaultIndexType(), 1);
   for (size_t i = n->shape.size(); i != 0 ; --i) {
     temp.push_back(acc);
@@ -373,7 +369,7 @@ Buffer BufferNode::make(Var data,
                         std::string scope,
                         int data_alignment,
                         int offset_factor) {
-  auto n = std::make_shared<BufferNode>();
+  auto n = make_node<BufferNode>();
   n->data = std::move(data);
   n->dtype = dtype;
   n->shape = std::move(shape);

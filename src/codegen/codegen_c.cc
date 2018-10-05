@@ -207,7 +207,7 @@ std::string CodeGenC::GetStructRef(
     } else if (t.is_int()) {
       os << "v_int64";
     } else {
-      LOG(FATAL) << "donot know how to handle type" << t;
+      LOG(FATAL) << "Do not know how to handle type" << t;
     }
     os << ")";
     return os.str();
@@ -652,11 +652,10 @@ void CodeGenC::VisitStmt_(const Store* op) {
 }
 
 void CodeGenC::VisitExpr_(const Let* op, std::ostream& os) {  // NOLINT(*)
-  CHECK(print_ssa_form_)
-      << "LetExpr is only supported by print SSA form";
   std::string value = PrintExpr(op->value);
   CHECK(!var_idmap_.count(op->var.get()));
   var_idmap_[op->var.get()] = value;
+  os << PrintExpr(op->body);
 }
 
 void CodeGenC::VisitExpr_(const Ramp* op, std::ostream& os) {  // NOLINT(*)

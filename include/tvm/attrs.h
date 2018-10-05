@@ -56,6 +56,22 @@ namespace tvm {
   __fvisit__(#FieldName, &FieldName)
 
 
+/*!
+ * \brief Create a NodeRef type that represents null.
+ * \tparam TNodeRef the type to be created.
+ * \return A instance that will represent None.
+ */
+template<typename TNodeRef>
+inline TNodeRef NullValue() {
+  return TNodeRef(NodePtr<Node>(nullptr));
+}
+
+template<>
+inline Type NullValue<Type>() {
+  return Type(Type::Handle, 0, 0);
+}
+
+
 /*! \brief Error thrown during attribute checking. */
 struct AttrError : public dmlc::Error {
   /*!
@@ -311,6 +327,10 @@ inline void SetValue<std::string>(std::string* ptr, const TVMArgValue& val) {
     CHECK(op != nullptr);
     *ptr = op->value;
   }
+}
+template<>
+inline void SetValue(Type* ptr, const TVMArgValue& val) {
+  *ptr = val.operator Type();
 }
 template<>
 inline void SetValue<double>(double* ptr, const TVMArgValue& val) {

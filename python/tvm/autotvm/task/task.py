@@ -158,7 +158,6 @@ def create(func_name, args, target, target_host=None, template_key=None):
                                                   "Consider to choose another name for this task"
         else:
             register(func_name, func=func)
-
     func = TASK_TABLE[func_name]
     ret = Task(func_name, args)
 
@@ -203,7 +202,7 @@ def args_to_workload(x):
         return tuple([args_to_workload(a) for a in x])
     elif isinstance(x, (str, int, float, np.int, np.float)):
         return x
-    elif isinstance(x, (expr.StringImm, expr.IntImm, expr.FloatImm)):
+    elif isinstance(x, (expr.StringImm, expr.IntImm, expr.UIntImm, expr.FloatImm)):
         return x.value
     elif x is None:
         return 0

@@ -11,6 +11,7 @@ try:
 except ImportError:
     xgb = None
 
+from ... import TVMError
 from .. import feature
 from ..util import get_rank
 from .metric import max_curve, recall_curve, cover_curve
@@ -127,6 +128,8 @@ class XGBoostCostModel(CostModel):
 
         self._sample_size = 0
         self._reset_pool(self.space, self.target, self.task)
+
+        self.feature_len = self._get_feature([0]).shape[1]
 
     def _reset_pool(self, space, target, task):
         """reset processing pool for feature extraction"""
@@ -294,11 +297,29 @@ class XGBoostCostModel(CostModel):
             pool = self._get_pool()
             feas = pool.map(self.feature_extract_func, need_extract)
             for i, fea in zip(need_extract, feas):
-                fea_cache[i] = fea
+                fea_cache[i] = fea if fea is not None else np.zeros(self.feature_len)
 
         ret = np.empty((len(indexes), fea_cache[indexes[0]].shape[-1]), dtype=np.float32)
         for i, ii in enumerate(indexes):
-            ret[i, :] = fea_cache[ii]
+            try:    
+                ret[i, :] = fea_cache[ii]
+            except ValueError:
+                from tvm.contrib.util import get_lower_ir
+
+                config = _extract_space.get(indexes[i-1])
+                with _extract_target:
+                   sch, args = _extract_task.instantiate(config)
+                print("Older")
+                print(get_lower_ir(sch))
+
+                print("=====================")
+                config = _extract_space.get(indexes[i])
+                with _extract_target:
+                   sch, args = _extract_task.instantiate(config)
+                print("Newer")
+                print(get_lower_ir(sch))
+                exit()
+          
         return ret
 
     def __del__(self):
@@ -314,7 +335,11 @@ def _extract_itervar_feature_index(index):
     config = _extract_space.get(index)
     with _extract_target:
         sch, args = _extract_task.instantiate(config)
-    fea = feature.get_itervar_feature_flatten(sch, args, take_log=True)
+    try:
+        fea = feature.get_itervar_feature_flatten(sch, args, take_log=True)
+    except TVMError:
+        return None
+        
     fea = np.concatenate((fea, list(config.get_other_option().values())))
     return fea
 

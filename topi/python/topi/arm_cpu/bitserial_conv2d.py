@@ -3,47 +3,59 @@
 from __future__ import absolute_import as _abs
 from collections import namedtuple
 import tvm
+import topi
+from tvm import autotvm
 from .. import tag
 from ..nn.pad import pad
-from ..nn.bitserial_conv2d import bitserial_conv2d, _get_schedule, _get_workload, bitpack
-from ..nn.bitserial_conv2d import SpatialPackNCHW, _WORKLOADS, spatial_pack_nchw
+from ..nn.bitserial_conv2d import bitpack, bitserial_conv2d_nhwc
+# from ..nn.bitserial_conv2d import SpatialPackNCHW, _WORKLOADS, spatial_pack_nchw
 from ..nn.util import get_pad_tuple
-from ..util import get_const_int
+from ..util import get_const_int, get_const_tuple
 from .. import generic
+from tvm.autotvm.task.nnvm_integration import deserialize_args
 
 RaspSpatialPack = namedtuple('SpatialPack',
                              ['vh', 'vw', 'vc', 'ba', 'bc', 'split_ci', 'kfactor'])
 
-_QUANTIZED_SCHEDULES_NHWC = [
-    RaspSpatialPack(2, 2, 8, 1, 1, False, 8),
-    RaspSpatialPack(1, 4, 8, 4, 1, False, 8),
-    RaspSpatialPack(1, 4, 8, 1, 16, False, 8),
-    RaspSpatialPack(1, 4, 8, 4, 8, False, 8),
-    RaspSpatialPack(1, 7, 8, 3, 8, False, 16),
-    RaspSpatialPack(1, 2, 8, 1, 8, False, 16),
-    RaspSpatialPack(2, 1, 8, 1, 4, False, 16),
-    RaspSpatialPack(1, 7, 8, 1, 1, True, 16),
-    RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
-    RaspSpatialPack(1, 1, 8, 1, 8, True, 16),
-    RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
-]
+# _QUANTIZED_SCHEDULES_NHWC = [
+#     RaspSpatialPack(2, 2, 8, 1, 1, False, 8),
+#     RaspSpatialPack(1, 4, 8, 4, 1, False, 8),
+#     RaspSpatialPack(1, 4, 8, 1, 16, False, 8),
+#     RaspSpatialPack(1, 4, 8, 4, 8, False, 8),
+#     RaspSpatialPack(1, 7, 8, 3, 8, False, 16),
+#     RaspSpatialPack(1, 2, 8, 1, 8, False, 16),
+#     RaspSpatialPack(2, 1, 8, 1, 4, False, 16),
+#     RaspSpatialPack(1, 7, 8, 1, 1, True, 16),
+#     RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
+#     RaspSpatialPack(1, 1, 8, 1, 8, True, 16),
+#     RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
+# ]
 
-_QUANTIZED_SCHEDULES_NCHW = [
-    # resnet
-    SpatialPackNCHW(2, 2, 8, 1, 1),
-    SpatialPackNCHW(1, 4, 8, 4, 1),
-    SpatialPackNCHW(1, 4, 8, 1, 16),
-    SpatialPackNCHW(1, 4, 8, 4, 8),
-    SpatialPackNCHW(1, 7, 8, 3, 8),
-    SpatialPackNCHW(1, 2, 8, 1, 8),
-    SpatialPackNCHW(2, 1, 8, 1, 4),
-    SpatialPackNCHW(1, 7, 8, 1, 1),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
-    SpatialPackNCHW(1, 1, 8, 1, 8),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
-]
+# _QUANTIZED_SCHEDULES_NCHW = [
+#     # resnet
+#     SpatialPackNCHW(2, 2, 8, 1, 1),
+#     SpatialPackNCHW(1, 4, 8, 4, 1),
+#     SpatialPackNCHW(1, 4, 8, 1, 16),
+#     SpatialPackNCHW(1, 4, 8, 4, 8),
+#     SpatialPackNCHW(1, 7, 8, 3, 8),
+#     SpatialPackNCHW(1, 2, 8, 1, 8),
+#     SpatialPackNCHW(2, 1, 8, 1, 4),
+#     SpatialPackNCHW(1, 7, 8, 1, 1),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
+#     SpatialPackNCHW(1, 1, 8, 1, 8),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
+# ]
 
-@_get_schedule.register("arm_cpu")
+@autotvm.task.register("topi_arm_cpu_bitserial_conv_nhwc")
+def _topi_bitserial_conv2d(*args, **kwargs):
+    args = deserialize_args(args)
+    C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
+    s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
+    data = args[0]
+    kernel = args[1]
+    return s, [data, kernel, C]
+
+# @_get_schedule.register("arm_cpu")
 def _get_schedule_bitserial_conv2d(wkl, layout):
     if wkl not in _WORKLOADS:
         raise ValueError("no schedule for such workload: {}".format(wkl))
@@ -55,22 +67,26 @@ def _get_schedule_bitserial_conv2d(wkl, layout):
     return sch
 
 
-@bitserial_conv2d.register("arm_cpu")
-def _declaration_bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits,
-                                  layout='NCHW', pack_dtype=None, out_dtype=None, dorefa=False):
-    if out_dtype is None:
-        out_dtype = data.dtype
-    assert data.shape[0].value == 1, "only support batch size=1 convolution on rasp"
-    assert layout == "NCHW" or layout == "NHWC", "only support layouts NCHW and NHWC"
-    if dorefa:
-        assert layout == "NCHW", "Cannot support dorea with NHWC layout yet"
-    wkl = _get_workload(data, kernel, stride, padding, out_dtype, layout)
-    sch = _get_schedule(wkl, layout)
-    if layout == "NCHW":
-        return spatial_pack_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
-                                 pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
-    return _spatial_pack_nhwc(data, kernel, stride, padding, activation_bits,
-                              weight_bits, out_dtype)
+# @bitserial_conv2d_nhwc.register("arm_cpu")
+# @autotvm.task.dispatcher
+# def bitserial_conv2d_arm_cpu_arg_to_workload(data, kernel, stride, padding, activation_bits, weight_bits,
+#                      pack_dtype=None, out_dtype=None, dorefa=False):
+#     if out_dtype is None:
+#         out_dtype = data.dtype
+#     assert data.shape[0].value == 1, "only support batch size=1 convolution on rasp"
+#     assert layout == "NCHW" or layout == "NHWC", "only support layouts NCHW and NHWC"
+#     if dorefa:
+#         assert layout == "NCHW", "Cannot support dorea with NHWC layout yet"
+#     wkl = _get_workload(data, kernel, stride, padding, out_dtype, layout)
+#     # sch = _get_schedule(wkl, layout)
+#     if layout == "NCHW":
+#         return spatial_pack_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
+#                                  pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+#     #return spatial_pack_nhwc(data, kernel, stride, padding, activation_bits,
+#                               #weight_bits, out_dtype)
+#     return ('bitserial_conv2d', ) + autotvm.task.args_to_workload(
+#         [data, kernel, stride, padding, activation_bits, weight_bits, out_dtype])
+
 
 def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC):
     kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
@@ -79,21 +95,19 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC):
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
-def _spatial_pack_nhwc(data, kernel, stride, padding, activation_bits, weight_bits, out_dtype):
+# TODO: support kernel prepacking and fallback support
+@autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
+def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits, 
+                      pack_dtype, out_dtype, dorefa):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
-    wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
-    sch = _get_schedule(wkl, "NHWC")
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
+    # wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
+    # sch = _get_schedule(wkl, "NHWC")
+    
+    N, H, W, CI = get_const_tuple(data.shape)
+    KH, KW, _, CO = get_const_tuple(kernel.shape)
+    # OCO, KH, KW, KB, VC, _ = kernel_vec.shape
 
-    data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
-    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC)
-    N, H, W, IB, CI = data_q.shape
-    OCO, KH, KW, KB, VC, _ = kernel_vec.shape
-
-    CO = OCO * VC
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
 
     if isinstance(stride, (tuple, list)):
@@ -106,9 +120,49 @@ def _spatial_pack_nhwc(data, kernel, stride, padding, activation_bits, weight_bi
     PAD_W = W + 2*WPAD
     OH = (H + 2*HPAD - KH) // HSTR + 1
     OW = (W + 2*WPAD - KW) // WSTR + 1
+    oshape = (1, OH, OW, CO)
+
+    # ==================== define configuration space ====================
+    n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
+    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+    ib, kb = cfg.reduce_axis(activation_bits), cfg.reduce_axis(weight_bits)
+
+    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] == 8)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+
+    ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
+                                 filter=lambda x: x.size[-1] % 8 == 0)
+
+    re_axes = cfg.define_reorder("reorder_0",
+                          [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
+                          policy='candidate', 
+                          candidate=[
+                          [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
+                          [n, oh, ow, co, vh, vw, kw, kh, ci_o, kb, ib, vc, ci_i],
+                          ])
+                          #interval=(3, 7))
+    cfg.add_flop(2 * N * OH * OW * CO * CI * 8 * KH * KW)
+
+    if cfg.is_fallback:
+        assert True, "Error: Fall back not implemented yet"
+    # ====================
+
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+
+    data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
+    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC)
+    N, H, W, IB, CI = data_q.shape
+    OCO, KH, KW, KB, VC, _ = kernel_vec.shape
+
     dvshape = (N, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
-    oshape = (1, OH, OW, CO)
 
     if (HPAD != 0 and WPAD != 0):
         data_pad = pad(data_q, (0, HPAD, WPAD, 0, 0), name="data_pad")
@@ -131,6 +185,7 @@ def _spatial_pack_nhwc(data, kernel, stride, padding, activation_bits, weight_bi
                         << (kb + ib).astype('uint16')), axis=[dh, dw, kb, ib, ci])
 
     conv = tvm.compute(ovshape, _conv, name='conv')
+
 
     return tvm.compute(oshape, lambda n, h, w, co:
                        conv[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
@@ -215,7 +270,7 @@ def _intrin_popcount(m, k_i, w_b, x_b):
         return tvm.decl_tensor_intrin(z.op, _intrin_func, binds={w: Wb, x:Xb})
 
 # ARM specific schedule that using custom microkernel
-def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
+def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
                                   kernel, kernel_q, kernel_vec,
                                   conv_out, output, last):
     # no stride and padding info here
@@ -246,62 +301,65 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
         wstride = (in_w - kern_w) // (out_w - 1)
         stride = get_const_int(hstride), get_const_int(wstride)
 
-    wkl = _get_workload(data, kernel, stride, padding, output.dtype, "NHWC")
-    sch = _get_schedule(wkl, "NHWC")
+    # wkl = _get_workload(data, kernel, stride, padding, output.dtype, "NHWC")
+    # sch = _get_schedule(wkl, "NHWC")
 
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
-    ba = sch.ba
-    bc = sch.bc
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+    # ba = cfg.ba
+    # bc = cfg.bc
 
     ##### Schedule data packing
     if data_pad is not None:
         s[data_pad].compute_inline()
 
     _, h, _, _, _, _, _ = s[data_vec].op.axis
-    if ba == 1:
-        oaxis = h
-        paxis = h
+    cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
+    oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
+    if cfg["tile_ah"].size[1] == 1:
+        oaxis = oh
+        paxis = oh
     else:
-        oh, ih = s[data_vec].split(h, ba)
         oaxis = oh
         paxis = ih
 
     s[data_vec].parallel(paxis)
-    s[data_vec].pragma(oaxis, "parallel_launch_point")
-    s[data_vec].pragma(paxis, "parallel_stride_pattern")
-    s[data_vec].pragma(oaxis, "parallel_barrier_when_finish")
 
-    ##### Schedule kernel packing
+    #### Schedule kernel packing
     co, _, _, _, _, _ = s[kernel_vec].op.axis
-    if bc == 1:
-        oaxis = co
-        paxis = co
+    cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
+    oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
+    if cfg["tile_bco"].size[1] == 1:
+        oaxis = oco
+        paxis = oco
     else:
-        oco, ico = s[kernel_vec].split(co, bc)
         oaxis = oco
         paxis = ico
 
     s[kernel_vec].parallel(paxis)
-    s[kernel_vec].pragma(oaxis, "parallel_launch_point")
-    s[kernel_vec].pragma(paxis, "parallel_stride_pattern")
-    s[kernel_vec].pragma(oaxis, "parallel_barrier_when_finish")
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
     dh, dw, kb, ib, ci = s[conv_out].op.reduce_axis
 
-    kfactor = sch.kfactor
-    if sch.split_ci:
-        oci, ici = s[conv_out].split(ci, kfactor)
-        s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, oci, kb, ib, vc, ici)
-    else:
-        s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, kb, ib, vc, ci)
+    ci_len = cfg.axis(ci).length
+    vc_len = cfg.axis(vc).length
+    # if ci_len == 8 or ci_len == 16:
+    #     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, kb, ib, vc, ci])
+    #     kfactor = ci_len
+    # else: #TODO need to check this reorder
+    #     # Need to split ci to match the tensorize pattern (ci_i = 8 or 16)
+    #      # oci, ici = s[conv_out].split(ci, kfactor)
+    #     # s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, oci, kb, ib, vc, ici)
 
-    pc = _intrin_popcount(8, kfactor, KB, IB)
-    s[conv_out].tensorize(kb, pc)
+    ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
 
+    re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci_o, kb, ib, vc, ci_i])
+    kfactor = cfg['tile_ci'].size[1]
+
+    pc = _intrin_popcount(vc_len, kfactor, KB, IB)
+    s[conv_out].tensorize(kb, pc)    
     n, h, w, co = s[last].op.axis
     co, vc = s[last].split(co, VC)
     oh, ow, vh, vw = s[last].tile(h, w, VH, VW)
@@ -310,12 +368,12 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
     if last != output:
         s[last].compute_inline()
 
+    oho, iho = cfg["tile_oh"].apply(s, last, oh)  # reuse parameter
     s[conv_out].compute_at(s[last], ow)
-    if co == 1:
-        oaxis = oh
-        paxis = oh
+    if cfg["tile_oh"].size[1] == 1:
+        oaxis = oho
+        paxis = oho
     else:
-        oho, iho = s[last].split(oh, bc)
         oaxis = oho
         paxis = iho
 
@@ -323,12 +381,14 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
     s = s.normalize()
     return s
 
-@generic.schedule_bitserial_conv2d_nhwc.register(["arm_cpu"])
-def schedule_bitserial_conv2d_nhwc(outs):
-    """Raspverry pi schedule for bitserial conv2d"""
+# @generic.schedule_bitserial_conv2d_nhwc.register(["arm_cpu"])
+# TODO: traverse_inline
+@autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
+def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
+    """Raspberry pi schedule for bitserial conv2d"""
     s = tvm.create_schedule([x.op for x in outs])
     scheduled_ops = []
-
+    # print ("ARM_CPU schedule")
     def traverse(op):
         """Traverse operators from computation graph"""
         # inline all one-to-one-mapping operators except the last stage (output)
@@ -360,9 +420,10 @@ def schedule_bitserial_conv2d_nhwc(outs):
                 # Need to go up 1 further, from the combine in bitpack
                 data = data.op.input_tensors[0]
 
-            _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
+            _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
                                           kernel, kernel_q, kernel_vec, conv_out, output, outs[0])
         scheduled_ops.append(op)
 
     traverse(outs[0].op)
+    # print("Done with ARM_CPU schedule")
     return s

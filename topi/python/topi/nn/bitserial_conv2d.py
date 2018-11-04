@@ -4,6 +4,7 @@ from __future__ import absolute_import as _abs
 from collections import namedtuple
 import numpy as np
 import tvm
+from tvm import autotvm
 from topi.transform import concatenate
 from .pad import pad
 from .util import get_pad_tuple
@@ -20,31 +21,31 @@ SpatialPackNCHW = namedtuple('SpatialPack',
 SpatialPackNHWC = namedtuple('SpatialPack',
                              ['vh', 'vw', 'vc', 'ba', 'bc'])
 
-_WORKLOADS = [
-    # workloads of resnet18 on imagenet
-    # input_size, input_size, ic, oc, kh, kw, pad, pad, stride, stride
-    Workload('int32', 'int32', 56, 56, 64, 64, 3, 3, 1, 1, 1, 1),
-    Workload('uint32', 'int32', 56, 56, 64, 64, 1, 1, 0, 0, 1, 1),
-    Workload('uint32', 'int32', 56, 56, 64, 128, 3, 3, 1, 1, 2, 2),
-    Workload('uint32', 'int32', 56, 56, 64, 128, 1, 1, 0, 0, 2, 2),
-    Workload('uint32', 'int32', 28, 28, 128, 128, 3, 3, 1, 1, 1, 1),
-    Workload('uint32', 'int32', 28, 28, 128, 256, 3, 3, 1, 1, 2, 2),
-    Workload('uint32', 'int32', 28, 28, 128, 256, 1, 1, 0, 0, 2, 2),
-    Workload('uint32', 'int32', 14, 14, 256, 256, 3, 3, 1, 1, 1, 1),
-    Workload('uint32', 'int32', 14, 14, 256, 512, 3, 3, 1, 1, 2, 2),
-    Workload('uint32', 'int32', 14, 14, 256, 512, 1, 1, 0, 0, 2, 2),
-    Workload('uint32', 'int32', 7, 7, 512, 512, 3, 3, 1, 1, 1, 1),
+# _WORKLOADS = [
+#     # workloads of resnet18 on imagenet
+#     # input_size, input_size, ic, oc, kh, kw, pad, pad, stride, stride
+#     Workload('uint32', 'int32', 56, 56, 64, 64, 3, 3, 1, 1, 1, 1),
+#     Workload('uint32', 'int32', 56, 56, 64, 64, 1, 1, 0, 0, 1, 1),
+#     Workload('uint32', 'int32', 56, 56, 64, 128, 3, 3, 1, 1, 2, 2),
+#     Workload('uint32', 'int32', 56, 56, 64, 128, 1, 1, 0, 0, 2, 2),
+#     Workload('uint32', 'int32', 28, 28, 128, 128, 3, 3, 1, 1, 1, 1),
+#     Workload('uint32', 'int32', 28, 28, 128, 256, 3, 3, 1, 1, 2, 2),
+#     Workload('uint32', 'int32', 28, 28, 128, 256, 1, 1, 0, 0, 2, 2),
+#     Workload('uint32', 'int32', 14, 14, 256, 256, 3, 3, 1, 1, 1, 1),
+#     Workload('uint32', 'int32', 14, 14, 256, 512, 3, 3, 1, 1, 2, 2),
+#     Workload('uint32', 'int32', 14, 14, 256, 512, 1, 1, 0, 0, 2, 2),
+#     Workload('uint32', 'int32', 7, 7, 512, 512, 3, 3, 1, 1, 1, 1),
 
-    # workload of alexnet on cifar10
-    Workload('int32', 'int32', 27, 27, 96, 192, 5, 5, 2, 2, 1, 1),
-    Workload('int32', 'int32', 13, 13, 192, 384, 3, 3, 1, 1, 1, 1),
-    Workload('int32', 'int32', 13, 13, 384, 384, 3, 3, 1, 1, 1, 1),
-    Workload('int32', 'int32', 13, 13, 384, 256, 3, 3, 1, 1, 1, 1),
-]
+#     # workload of alexnet on cifar10
+#     Workload('int32', 'int32', 27, 27, 96, 192, 5, 5, 2, 2, 1, 1),
+#     Workload('int32', 'int32', 13, 13, 192, 384, 3, 3, 1, 1, 1, 1),
+#     Workload('int32', 'int32', 13, 13, 384, 384, 3, 3, 1, 1, 1, 1),
+#     Workload('int32', 'int32', 13, 13, 384, 256, 3, 3, 1, 1, 1, 1),
+# ]
 
 @tvm.target.generic_func
-def bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits,
-                     layout='NCHW', pack_dtype='uint32', out_dtype='int32', dorefa=False):
+def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
+                          pack_dtype, out_dtype, dorefa):
     """Bitserial Conv2D operator.
 
     Parameters
@@ -62,9 +63,6 @@ def bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits
 
     padding : int or a list/tuple of two ints
         padding size, or [pad_height, pad_width]
-
-    layout : str
-        layout of data
 
     activation_bits: int
         number of bits used for activations/input elements
@@ -94,46 +92,99 @@ def bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits
                                  pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
     elif layout == 'NHWC':
         return spatial_pack_nhwc(data, kernel, stride, padding, activation_bits, weight_bits,
-                                 pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+                                 pack_dtype, out_dtype, dorefa)
     raise ValueError("not support this layout {} yet".format(layout))
 
-def _get_workload(data, kernel, stride, padding, out_dtype, layout):
-    """ Get the workload structure. """
-    assert layout == "NCHW" or layout == "NHWC", \
-        "Only support layouts NCHW and NHWC"
-    if layout == "NCHW":
-        _, CI, IH, IW = [x.value for x in data.shape]
-        CO, _, KH, KW = [x.value for x in kernel.shape]
-    else: # NHWC
-        IH, IW = data.shape[1].value, data.shape[2].value
-        KH, KW, CI, CO = [x for x in get_const_tuple(kernel.shape)]
-
-    HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
-    if isinstance(stride, (tuple, list)):
-        HSTR, WSTR = stride
-    else:
-        HSTR, WSTR = stride, stride
-
-    return Workload(data.dtype, out_dtype, IH, IW, CI, CO, KH, KW, HPAD, WPAD, HSTR, WSTR)
-
 @tvm.target.generic_func
-def _get_schedule(wkl, layout):
-    # pylint: disable=unreachable
-    """ Get the platform specific schedule. """
-    target = tvm.target.current_target()
-    raise RuntimeError(
-        "No schedule for current target:{}".format(target))
-    # This return has no use, merely to supress pylint warning
-    return wkl
+def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight_bits,
+                          pack_dtype, out_dtype, dorefa):
+    """Bitserial Conv2D operator.
 
-def spatial_pack_nchw(data, kernel, stride, padding, in_bits, weight_bits,
-                      pack_dtype, out_dtype, dorefa=False):
+    Parameters
+    ----------
+    input : tvm.Tensor
+        4-D with shape [batch, in_channel, in_height, in_width] or
+                       [batch, in_height, in_width, in_channel]
+
+    filter : tvm.Tensor
+        4-D with shape [num_filter, in_channel, filter_height, filter_width] or
+		       [filter_height, filter_width, in_channel, num_filter]
+
+    stride : int or a list/tuple of two ints
+        stride size, or [stride_height, stride_width]
+
+    padding : int or a list/tuple of two ints
+        padding size, or [pad_height, pad_width]
+
+    activation_bits: int
+        number of bits used for activations/input elements
+
+    weight_bits: int
+        number of bits used for weight elements
+
+    out_dtype: str
+        return type of convolution
+
+    pack_dtype: str
+        bit packing type
+
+    dorefa: bool
+        preform the bitserial dot-product using 2 popcounts (required for DoReFa-Net)
+
+    Returns
+    -------
+    output : tvm.Tensor
+        4-D with shape [batch, out_channel, out_height, out_width] or
+                       [batch, out_height, out_width, out_channel]
+    """
+    # search platform specific declaration first
+    # default declaration
+    if layout == 'NCHW':
+        return spatial_pack_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
+                                 pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+    elif layout == 'NHWC':
+        return spatial_pack_nhwc(data, kernel, stride, padding, activation_bits, weight_bits,
+                                 out_dtype, pack_dtype, dorefa)
+    raise ValueError("not support this layout {} yet".format(layout))
+
+# def _get_workload(data, kernel, stride, padding, out_dtype, layout):
+#     """ Get the workload structure. """
+#     assert layout == "NCHW" or layout == "NHWC", \
+#         "Only support layouts NCHW and NHWC"
+#     if layout == "NCHW":
+#         _, CI, IH, IW = [x.value for x in data.shape]
+#         CO, _, KH, KW = [x.value for x in kernel.shape]
+#     else: # NHWC
+#         IH, IW = data.shape[1].value, data.shape[2].value
+#         KH, KW, CI, CO = [x for x in get_const_tuple(kernel.shape)]
+
+#     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+#     if isinstance(stride, (tuple, list)):
+#         HSTR, WSTR = stride
+#     else:
+#         HSTR, WSTR = stride, stride
+
+#     return Workload(data.dtype, out_dtype, IH, IW, CI, CO, KH, KW, HPAD, WPAD, HSTR, WSTR)
+
+# @tvm.target.generic_func
+# def _get_schedule(wkl, layout):
+#     # pylint: disable=unreachable
+#     """ Get the platform specific schedule. """
+#     target = tvm.target.current_target()
+#     raise RuntimeError(
+#         "No schedule for current target:{}".format(target))
+#     # This return has no use, merely to supress pylint warning
+#     return wkl
+
+@autotvm.register_topi_compute(bitserial_conv2d_nchw, ['cpu', 'arm_cpu'], 'direct')
+def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
+                      pack_dtype, out_dtype, dorefa):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
     kernel_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
-    IB, _, CI, H, W = data_q.shape
-    KB, CO, _, KH, KW = kernel_q.shape
+    IB, N, CI, H, W = get_const_tuple(data_q.shape)
+    KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
 
     if isinstance(stride, (tuple, list)):
@@ -142,12 +193,6 @@ def spatial_pack_nchw(data, kernel, stride, padding, in_bits, weight_bits,
         HSTR, WSTR = stride, stride
     HCAT, WCAT = KH-1, KW-1
 
-    wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NCHW")
-    sch = _get_schedule(wkl, "NCHW")
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
-
     TH = H + 2*HPAD
     TW = W + 2*WPAD
     OH = (H + 2*HPAD - KH) // HSTR + 1
@@ -155,13 +200,43 @@ def spatial_pack_nchw(data, kernel, stride, padding, in_bits, weight_bits,
 
     dshape = (IB, 1, CI, H, W)
     dpshape = (IB, 1, CI, TH, TW)
-    dvshape = (1, TH//(VH*HSTR), TW//(VW*WSTR), CI, VH*HSTR+HCAT, VW*WSTR+WCAT, IB)
-
     kshape = (KB, CO, CI, KH, KW)
-    kvshape = (CO//VC, CI, KH, KW, KB, VC)
-
-    ovshape = (1, CO//VC, OH//VH, OW//VW, VH, VW, VC)
     oshape = (1, CO, OH, OW)
+
+     # ==================== define configuration space ====================
+    n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
+    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+    ib, kb = cfg.reduce_axis(in_bits), cfg.reduce_axis(weight_bits)
+
+    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+
+    re_axes = cfg.define_reorder("reorder_0",
+                          [n, co, oh, ow, vc, vh, vw, kh, kw, kb, ib, ci],
+                          policy='interval_all', interval=(6, 11))
+    cfg.add_flop(2 * N * OH * OW * CO * CI * 8 * KH * KW)
+
+    if cfg.is_fallback:
+        assert True, "Error: Fall back not implemented yet"
+    # ====================
+
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+
+    TH = H + 2*HPAD
+    TW = W + 2*WPAD
+    OH = (H + 2*HPAD - KH) // HSTR + 1
+    OW = (W + 2*WPAD - KW) // WSTR + 1
+
+    dvshape = (1, TH//(VH*HSTR), TW//(VW*WSTR), CI, VH*HSTR+HCAT, VW*WSTR+WCAT, IB)
+    kvshape = (CO//VC, CI, KH, KW, KB, VC)
+    ovshape = (1, CO//VC, OH//VH, OW//VW, VH, VW, VC)
 
     DOPAD = (HPAD != 0 and WPAD != 0)
     if DOPAD:
@@ -203,14 +278,15 @@ def spatial_pack_nchw(data, kernel, stride, padding, in_bits, weight_bits,
                        conv[n][co//VC][h//VH][w//VW][h%VH][w%VW][co%VC],
                        name='conv_vec', tag='spatial_bitserial_conv_nchw')
 
-def spatial_pack_nhwc(data, kernel, stride, padding, in_bits, weight_bits,
-                      pack_dtype, out_dtype, dorefa=False):
+@autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'cpu', 'direct')
+def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
+                      pack_dtype, out_dtype, dorefa):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     data_q = bitpack(data, in_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
     kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
-    _, H, W, CI, IB = data_q.shape
-    KH, KW, _, CO, KB = kernel_q.shape
+    N, H, W, CI, IB = get_const_tuple(data_q.shape)
+    KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
 
     if isinstance(stride, (tuple, list)):
@@ -219,16 +295,37 @@ def spatial_pack_nhwc(data, kernel, stride, padding, in_bits, weight_bits,
         HSTR, WSTR = stride, stride
     HCAT, WCAT = KH-1, KW-1
 
-    wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
-    sch = _get_schedule(wkl, "NHWC")
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
-
     PAD_H = H + 2*HPAD
     PAD_W = W + 2*WPAD
     OH = (H + 2*HPAD - KH) // HSTR + 1
     OW = (W + 2*WPAD - KW) // WSTR + 1
+    oshape = (1, OH, OW, CO)
+
+    # ==================== define configuration space ====================
+    n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
+    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+    ib, kb = cfg.reduce_axis(in_bits), cfg.reduce_axis(weight_bits)
+
+    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
+                       filter=lambda x: max(x.size[1:]) <= 16)
+    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+    # TODO: check this reorder interval
+    re_axes = cfg.define_reorder("reorder_0",
+                          [n, oh, ow, co, vh, vw, kh, kw, kb, ib, vc, ci],
+                          policy='interval_all', interval=(3, 7))
+    cfg.add_flop(2 * N * OH * OW * CO * CI * 8 * KH * KW)
+
+    if cfg.is_fallback:
+        assert True, "Error: Fall back not implemented yet"
+    # ====================
+
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
 
     dvshape = (1, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, CI, IB)
     kvshape = (CO, KH, KW, CI, VC, KB)

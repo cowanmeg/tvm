@@ -1,78 +1,102 @@
 # pylint: disable=invalid-name,unused-variable,invalid-name
 """Bitserial conv2d schedule on x86"""
 import tvm
+import topi
+from tvm import autotvm
 from topi.util import get_const_int
 from .. import generic, tag
-from ..nn.bitserial_conv2d import bitserial_conv2d, _get_schedule, _get_workload
-from ..nn.bitserial_conv2d import SpatialPackNCHW, SpatialPackNHWC
-from ..nn.bitserial_conv2d import _WORKLOADS, _SCH_TO_DECL_FUNC_QUANT
+from ..nn.bitserial_conv2d import bitserial_conv2d_nhwc, bitserial_conv2d_nchw#, _get_schedule, _get_workload
+from ..nn.bitserial_conv2d import SpatialPackNCHW, SpatialPackNHWC, spatial_pack_nchw, spatial_pack_nhwc
+# from ..nn.bitserial_conv2d import _WORKLOADS, _SCH_TO_DECL_FUNC_QUANT
+from tvm.autotvm.task.nnvm_integration import deserialize_args
 
-_QUANTIZED_SCHEDULES_NCHW = [
-    # resnet
-    SpatialPackNCHW(2, 2, 8, 1, 1),
-    SpatialPackNCHW(1, 4, 8, 4, 1),
-    SpatialPackNCHW(1, 4, 8, 1, 16),
-    SpatialPackNCHW(1, 4, 8, 4, 8),
-    SpatialPackNCHW(1, 7, 8, 3, 8),
-    SpatialPackNCHW(1, 2, 8, 1, 8),
-    SpatialPackNCHW(2, 1, 8, 1, 4),
-    SpatialPackNCHW(1, 7, 8, 1, 1),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
-    SpatialPackNCHW(1, 1, 8, 1, 8),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
+# _QUANTIZED_SCHEDULES_NCHW = [
+#     # resnet
+#     SpatialPackNCHW(2, 2, 8, 1, 1),
+#     SpatialPackNCHW(1, 4, 8, 4, 1),
+#     SpatialPackNCHW(1, 4, 8, 1, 16),
+#     SpatialPackNCHW(1, 4, 8, 4, 8),
+#     SpatialPackNCHW(1, 7, 8, 3, 8),
+#     SpatialPackNCHW(1, 2, 8, 1, 8),
+#     SpatialPackNCHW(2, 1, 8, 1, 4),
+#     SpatialPackNCHW(1, 7, 8, 1, 1),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
+#     SpatialPackNCHW(1, 1, 8, 1, 8),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
 
-    SpatialPackNCHW(3, 3, 16, 3, 16),
-    SpatialPackNCHW(1, 1, 16, 2, 16),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
-    SpatialPackNCHW(1, 1, 8, 1, 16),
-]
+#     SpatialPackNCHW(3, 3, 16, 3, 16),
+#     SpatialPackNCHW(1, 1, 16, 2, 16),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
+#     SpatialPackNCHW(1, 1, 8, 1, 16),
+# ]
 
-_QUANTIZED_SCHEDULES_NHWC = [
-    # resnet
-    SpatialPackNHWC(2, 2, 8, 1, 1),
-    SpatialPackNHWC(1, 4, 8, 4, 1),
-    SpatialPackNHWC(1, 4, 8, 1, 16),
-    SpatialPackNHWC(1, 4, 8, 4, 8),
-    SpatialPackNHWC(1, 7, 8, 3, 8),
-    SpatialPackNHWC(1, 2, 8, 1, 8),
-    SpatialPackNHWC(2, 1, 8, 1, 4),
-    SpatialPackNHWC(1, 7, 8, 1, 1),
-    SpatialPackNHWC(1, 1, 8, 1, 16),
-    SpatialPackNHWC(1, 1, 8, 1, 8),
-    SpatialPackNHWC(1, 1, 8, 1, 16),
-]
+# _QUANTIZED_SCHEDULES_NHWC = [
+#     # resnet
+#     SpatialPackNHWC(2, 2, 8, 1, 1),
+#     SpatialPackNHWC(1, 4, 8, 4, 1),
+#     SpatialPackNHWC(1, 4, 8, 1, 16),
+#     SpatialPackNHWC(1, 4, 8, 4, 8),
+#     SpatialPackNHWC(1, 7, 8, 3, 8),
+#     SpatialPackNHWC(1, 2, 8, 1, 8),
+#     SpatialPackNHWC(2, 1, 8, 1, 4),
+#     SpatialPackNHWC(1, 7, 8, 1, 1),
+#     SpatialPackNHWC(1, 1, 8, 1, 16),
+#     SpatialPackNHWC(1, 1, 8, 1, 8),
+#     SpatialPackNHWC(1, 1, 8, 1, 16),
+# ]
 
-@_get_schedule.register("cpu")
-def _get_schedule_bitserial_conv2d(wkl, layout):
-    if wkl not in _WORKLOADS:
-        raise ValueError("no schedule for such workload: {}".format(wkl))
-    idx = _WORKLOADS.index(wkl)
-    if layout == "NCHW":
-        sch = _QUANTIZED_SCHEDULES_NCHW[idx]
-    elif layout == "NHWC":
-        sch = _QUANTIZED_SCHEDULES_NHWC[idx]
-    return sch
+# @_get_schedule.register("cpu")
+# def _get_schedule_bitserial_conv2d(wkl, layout):
+#     if wkl not in _WORKLOADS:
+#         raise ValueError("no schedule for such workload: {}".format(wkl))
+#     idx = _WORKLOADS.index(wkl)
+#     if layout == "NCHW":
+#         sch = _QUANTIZED_SCHEDULES_NCHW[idx]
+#     elif layout == "NHWC":
+#         sch = _QUANTIZED_SCHEDULES_NHWC[idx]
+#     return sch
 
-@bitserial_conv2d.register("cpu")
-def _declaration_bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits,
-                                  layout='NCHW', pack_dtype=None, out_dtype=None, dorefa=False):
-    if out_dtype is None:
-        out_dtype = data.dtype
-    assert data.shape[0].value == 1, "only support batch size=1 convolution on rasp"
-    assert layout == "NCHW" or layout == "NHWC", "only support layouts NCHW and NHWC"
+@autotvm.task.register("topi_x86_bitserial_conv_nhwc")
+def topi_bitserial_conv2d_nhwc(*args, **kwargs):
+    args = deserialize_args(args)
+    C = topi.nn.bitserial_conv2d_nwhc(*args, **kwargs)
+    s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
+    data = args[0]
+    kernel = args[1]
+    return s, [data, kernel, C]
 
-    wkl = _get_workload(data, kernel, stride, padding, out_dtype, layout)
-    sch = _get_schedule(wkl, layout)
-    return _SCH_TO_DECL_FUNC_QUANT[type(sch)](data, kernel, stride, padding, activation_bits,
-                                              weight_bits, pack_dtype, out_dtype, dorefa)
+@autotvm.task.register("topi_arm_cpu_bitserial_conv_nchw")
+@autotvm.task.register("topi_x86_bitserial_conv_nchw")
+def topi_bitserial_conv2d_nchw(*args, **kwargs):
+    args = deserialize_args(args)
+    C = topi.nn.bitserial_conv2d_nchw(*args, **kwargs)
+    s = generic.nn.schedule_bitserial_conv2d_nchw([C])
+    data = args[0]
+    kernel = args[1]
+    return s, [data, kernel, C]
 
-@generic.schedule_bitserial_conv2d_nchw.register(["cpu"])
-@generic.schedule_bitserial_conv2d_nhwc.register(["cpu"])
-def schedule_bitserial_conv2d(outs):
+# @bitserial_conv2d_nhwc.register("cpu")
+# @bitserial_conv2d_nchw.register("cpu")
+# def _declaration_bitserial_conv2d(data, kernel, stride, padding, activation_bits, weight_bits,
+#                                   layout='NCHW', pack_dtype=None, out_dtype=None, dorefa=False):
+#     if out_dtype is None:
+#         out_dtype = data.dtype
+#     assert data.shape[0].value == 1, "only support batch size=1 convolution on rasp"
+#     assert layout == "NCHW" or layout == "NHWC", "only support layouts NCHW and NHWC"
+
+#     wkl = _get_workload(data, kernel, stride, padding, out_dtype, layout)
+#     sch = _get_schedule(wkl, layout)
+#     return _SCH_TO_DECL_FUNC_QUANT[type(sch)](data, kernel, stride, padding, activation_bits,
+#                                               weight_bits, pack_dtype, out_dtype, dorefa)
+
+# @generic.schedule_bitserial_conv2d_nchw.register(["cpu"])
+# @generic.schedule_bitserial_conv2d_nhwc.register(["cpu"])
+@autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'cpu', 'direct')
+@autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nchw, ['arm_cpu', 'cpu'], 'direct')
+def schedule_bitserial_conv2d(cfg, outs):
     """CPU schedule for bitserial convolutions NCHW and NHWC"""
     s = tvm.create_schedule([x.op for x in outs])
     scheduled_ops = []
-
     def traverse(op):
         """Traverse operators from computation graph"""
         output = op.output(0)
@@ -105,11 +129,11 @@ def schedule_bitserial_conv2d(outs):
                 data = data.op.input_tensors[0]
 
             if 'spatial_bitserial_conv_nchw' in op.tag:
-                _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
+                schedule_bitserial_conv2d_nchw(cfg, s, data, data_q, data_pad, data_vec,
                                               kernel, kernel_q, kernel_vec,
                                               conv_out, output, outs[0])
             elif 'spatial_bitserial_conv_nhwc' in op.tag:
-                _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
+                schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
                                               kernel, kernel_q, kernel_vec,
                                               conv_out, output, outs[0])
         scheduled_ops.append(op)
@@ -117,7 +141,7 @@ def schedule_bitserial_conv2d(outs):
     traverse(outs[0].op)
     return s
 
-def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
+def schedule_bitserial_conv2d_nchw(cfg, s, data, data_q, data_pad, data_vec,
                                   kernel, kernel_q, kernel_vec,
                                   conv_out, output, last):
     IB, _, CI, IH, IW = data_q.shape
@@ -138,37 +162,41 @@ def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
     wstride = get_const_int((TW - KW) // (OW - 1))
     stride = (hstride, wstride)
 
-    wkl = _get_workload(data, kernel, stride, padding, output.dtype, "NCHW")
-    sch = _get_schedule(wkl, "NCHW")
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
-    ba = sch.ba
-    bc = sch.bc
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
 
-    CC = s.cache_write(conv_out, "global")
-    n, co, oh, ow, vh, vw, vc = s[conv_out].op.axis
-    s[conv_out].vectorize(vc)
+    # CC = s.cache_write(conv_out, "global")
+    # n, co, oh, ow, vh, vw, vc = s[conv_out].op.axis
+    # s[conv_out].vectorize(vc)
 
-    s[CC].compute_at(s[conv_out], ow)
-    n, co, oh, ow, vh, vw, vc = s[CC].op.axis
-    ci, dh, dw, b1, b2 = s[CC].op.reduce_axis
-    s[CC].reorder(ci, dh, vh, dw, vw, b1, b2, vc)
-    s[CC].unroll(b1)
-    s[CC].unroll(b2)
-    s[CC].vectorize(vc)
+    # s[CC].compute_at(s[conv_out], ow)
+    # n, co, oh, ow, vh, vw, vc = s[CC].op.axis
+    # ci, dh, dw, b1, b2 = s[CC].op.reduce_axis
+    # s[CC].reorder(ci, dh, vh, dw, vw, b1, b2, vc)
+
+    # s[CC].vectorize(vc)
+
+    # cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2])
+    # cfg["ann_reduce"].apply(s, CC, [b1, b2, dh, dw],
+    #                         axis_lens=[get_const_int(b1.dom.extent),
+    #                                    get_const_int(b2.dom.extent),
+    #                                    get_const_int(dh.dom.extent),
+    #                                    get_const_int(dw.dom.extent)],
+    #                         max_unroll=16,
+    #                         cfg=cfg)
 
     ##### Schedule A
     if data_pad is not None:
         s[data_pad].compute_inline()
 
-    _, h, _, _, _, _, vw = s[data_vec].op.axis
-    s[data_vec].vectorize(vw)
-    if ba == 1:
-        oaxis = h
-        paxis = h
+    _, _, h, _, _, _, _ = s[data_vec].op.axis
+    cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
+    oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
+    if cfg["tile_ah"].size[1] == 1:
+        oaxis = oh
+        paxis = oh
     else:
-        oh, ih = s[data_vec].split(h, ba)
         oaxis = oh
         paxis = ih
 
@@ -179,13 +207,13 @@ def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
 
 
     ##### Schedule B
-    co, _, _, _, _, vc = s[kernel_vec].op.axis
-    s[kernel_vec].vectorize(vc)
-    if bc == 1:
-        oaxis = co
-        paxis = co
+    co, _, _, _, _, _ = s[kernel_vec].op.axis
+    cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
+    oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
+    if cfg["tile_bco"].size[1] == 1:
+        oaxis = oco
+        paxis = oco
     else:
-        oco, ico = s[kernel_vec].split(co, bc)
         oaxis = oco
         paxis = ico
 
@@ -195,7 +223,23 @@ def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
     s[kernel_vec].pragma(oaxis, "parallel_barrier_when_finish")
 
 
-    ##### Schedule C
+   ##### Schedule Convolution
+    n, co, oh, ow, vh, vw, vc = s[conv_out].op.axis
+    ci, dh, dw, ib, kb = s[conv_out].op.reduce_axis
+
+    # s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2)
+    cfg["reorder_0"].apply(s, conv_out, [n, co, oh, ow, vc, vh, vw, dh, dw, kb, ib, ci])
+    cfg["ann_reduce"].apply(s, conv_out, [kb, ib, dh, dw],
+                            axis_lens=[get_const_int(kb.dom.extent),
+                                       get_const_int(ib.dom.extent),
+                                       get_const_int(dh.dom.extent),
+                                       get_const_int(dw.dom.extent)],
+                            max_unroll=16,
+                            cfg=cfg)
+
+    s[conv_out].vectorize(vc)
+
+    # # Schedule output
     n, co, h, w = s[last].op.axis
     co, vc = s[last].split(co, VC)
     oh, ow, vh, vw = s[last].tile(h, w, VH, VW)
@@ -204,9 +248,10 @@ def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
         s[output].compute_inline()
     s[conv_out].compute_at(s[last], ow)
 
-    if bc == 1:
-        oaxis = co
-        paxis = co
+    oco, ico = cfg["tile_oh"].apply(s, last, co) 
+    if cfg["tile_oh"].size[1] == 1:
+        oaxis = oco
+        paxis = oco
     else:
         oco, ico = s[last].split(co, bc)
         oaxis = oco
@@ -219,7 +264,7 @@ def _schedule_spatial_conv2d_nchw(s, data, data_q, data_pad, data_vec,
 
     return s
 
-def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
+def schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
                                   kernel, kernel_q, kernel_vec,
                                   conv_out, output, last):
     # no stride and padding info here
@@ -240,26 +285,31 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
     wstride = get_const_int((TW - KW) // (OW - 1))
     stride = (hstride, wstride)
 
-    wkl = _get_workload(data, kernel, stride, padding, last.dtype, "NHWC")
-    sch = _get_schedule(wkl, "NHWC")
-    VH = sch.vh
-    VW = sch.vw
-    VC = sch.vc
-    ba = sch.ba
-    bc = sch.bc
+    # wkl = _get_workload(data, kernel, stride, padding, last.dtype, "NHWC")
+    # sch = _get_schedule(wkl, "NHWC")
+    # VH = sch.vh
+    # VW = sch.vw
+    # VC = sch.vc
+    # ba = sch.ba
+    # bc = sch.bc
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
 
     ##### Schedule data packing
     if data_pad is not None:
         s[data_pad].compute_inline()
 
     _, h, _, _, _, _, _ = s[data_vec].op.axis
-    if ba == 1:
-        oaxis = h
-        paxis = h
+    cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
+    oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
+    if cfg["tile_ah"].size[1] == 1:
+        oaxis = oh
+        paxis = oh
     else:
-        oh, ih = s[data_vec].split(h, ba)
         oaxis = oh
         paxis = ih
+
     s[data_vec].parallel(paxis)
     s[data_vec].pragma(oaxis, "parallel_launch_point")
     s[data_vec].pragma(paxis, "parallel_stride_pattern")
@@ -268,11 +318,12 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
 
     ##### Schedule kernel packing
     co, _, _, _, _, _ = s[kernel_vec].op.axis
-    if bc == 1:
-        oaxis = co
-        paxis = co
+    cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
+    oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
+    if cfg["tile_bco"].size[1] == 1:
+        oaxis = oco
+        paxis = oco
     else:
-        oco, ico = s[kernel_vec].split(co, bc)
         oaxis = oco
         paxis = ico
 
@@ -286,7 +337,15 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
     dh, dw, ci, b1, b2 = s[conv_out].op.reduce_axis
 
-    s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2)
+    # s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2)
+    cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2])
+    cfg["ann_reduce"].apply(s, conv_out, [b1, b2, dh, dw],
+                            axis_lens=[get_const_int(b1.dom.extent),
+                                       get_const_int(b2.dom.extent),
+                                       get_const_int(dh.dom.extent),
+                                       get_const_int(dw.dom.extent)],
+                            max_unroll=16,
+                            cfg=cfg)
 
     s[conv_out].unroll(b1)
     s[conv_out].unroll(b2)
@@ -302,11 +361,11 @@ def _schedule_spatial_conv2d_nhwc(s, data, data_q, data_pad, data_vec,
         s[output].compute_inline()
     s[conv_out].compute_at(s[last], ow)
 
-    if bc == 1:
-        oaxis = oh
-        paxis = oh
+    oho, iho = cfg["tile_oh"].apply(s, last, oh)  # reuse parameter
+    if cfg["tile_oh"].size[1] == 1:
+        oaxis = oho
+        paxis = oho
     else:
-        oho, iho = s[last].split(oh, bc)
         oaxis = oho
         paxis = iho
 

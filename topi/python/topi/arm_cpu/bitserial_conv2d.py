@@ -183,25 +183,39 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
             kernel_vec[co, dh, dw, kb, vc, ci].astype('uint16') &
             data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci].astype('uint16'))
                         << (kb + ib).astype('uint16')), axis=[dh, dw, kb, ib, ci])
-
-    conv = tvm.compute(ovshape, _conv, name='conv')
+    def _dorefa_conv(n, h, w, co, vh, vw, vc):
+        return tvm.sum((tvm.popcount(
+            kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
+            data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci].astype('int16')) -
+            tvm.popcount(~kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
+            data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci]).astype('int16'))
+                        << (kb + ib).astype('int16'), axis=[dh, dw, kb, ib, ci])
+    if dorefa:
+        conv = tvm.compute(ovshape, _dorefa_conv, name='conv', tag='dorefa')
+    else:
+        conv = tvm.compute(ovshape, _conv, name='conv')
 
 
     return tvm.compute(oshape, lambda n, h, w, co:
                        conv[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
                        name='output_vec', tag='spatial_bitserial_conv_nhwc')
 
-def _intrin_popcount(m, k_i, w_b, x_b):
+def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
     dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=dtype, name='w')
     x = tvm.placeholder((x_b, k_i,), dtype=dtype, name='x')
     k = tvm.reduce_axis((0, k_i), name='k')
     bw = tvm.reduce_axis((0, w_b), name='bw')
     bx = tvm.reduce_axis((0, x_b), name='bx')
-    z = tvm.compute((m,), lambda i:
-                    tvm.sum(tvm.popcount(w[bw, i, k].astype('uint16') &
-                                         x[bx, k].astype('uint16'))
-                            << (bw+bx).astype('uint16'), axis=[bw, bx, k]), name='z')
+    if dorefa:
+        z = tvm.compute((m,), lambda i:
+                    tvm.sum((tvm.popcount(w[bw, i, k].astype('int16') & x[bx, k].astype('int16')) - 
+                            tvm.popcount(~w[bw, i, k].astype('int16') & x[bx, k].astype('int16')))
+                            << (bw+bx).astype('int16'), axis=[bw, bx, k]), name='z')
+    else:
+        z = tvm.compute((m,), lambda i:
+                    tvm.sum(tvm.popcount(w[bw, i, k].astype('uint16') & x[bx, k].astype('uint16'))
+                            << (bw+bx).astype('int16'), axis=[bw, bx, k]), name='z')
 
     Wb = tvm.decl_buffer(w.shape, w.dtype,
                          name="W",
@@ -215,15 +229,27 @@ def _intrin_popcount(m, k_i, w_b, x_b):
     def _intrin_func(ins, outs):
         ww, xx = ins
         zz = outs[0]
-        vpadd = "llvm.arm.neon.vpadd.v8u8"
-        vpadalu = "llvm.arm.neon.vpadalu.v16u8.v8u16"
+        
         args_1 = tvm.const(1, 'uint32')
         args_2 = tvm.const(2, 'uint32')
+
+        if dorefa:
+            vpadd = "llvm.arm.neon.vpadd.v8i8"
+            vpadalu = "llvm.arm.neon.vpadals.v16i8.v8i16"
+            full_dtype = 'int8x16'
+            half_dtype = 'int8x8'
+            return_dtype = 'int16x8'
+        else:
+            vpadd = "llvm.arm.neon.vpadd.v8u8"
+            vpadalu = "llvm.arm.neon.vpadalu.v16u8.v8u16"
+            full_dtype = 'uint8x16'
+            half_dtype = 'uint8x8'
+            return_dtype = 'uint16x8'
 
         def _instr(index):
             irb = tvm.ir_builder.create()
             if index == 1:
-                irb.emit(zz.vstore(0, tvm.const(0, 'uint16x8')))
+                irb.emit(zz.vstore(0, tvm.const(0, return_dtype)))
                 return irb.get()
 
             cnts8 = [None] * 8
@@ -233,35 +259,43 @@ def _intrin_popcount(m, k_i, w_b, x_b):
                 for bx in range(x_b):
                     if k_i == 16:
                         for i in range(m):
-                            ands = ww.vload([bw, i, 0], 'uint8x16') & xx.vload([bx, 0], 'uint8x16')
-                            cnts = tvm.popcount(ands)
-                            upper_half = tvm.call_pure_intrin('uint8x8', 'vectorhigh', cnts)
-                            lower_half = tvm.call_pure_intrin('uint8x8', 'vectorlow', cnts)
+                            w_ = ww.vload([bw, i, 0], 'uint8x16').astype(full_dtype)
+                            x_ = xx.vload([bx, 0], 'uint8x16').astype(full_dtype)
+                            if dorefa:
+                                cnts = tvm.popcount(w_ & x_) - tvm.popcount(~w_ & x_)
+                            else:
+                                cnts = tvm.popcount(w_ & x_)
+                            upper_half = tvm.call_pure_intrin(half_dtype, 'vectorhigh', cnts)
+                            lower_half = tvm.call_pure_intrin(half_dtype, 'vectorlow', cnts)
                             cnts8[i] = upper_half + lower_half
                         for i in range(m//2):
-                            cnts4[i] = tvm.call_llvm_intrin('uint8x8', vpadd,
+                            cnts4[i] = tvm.call_llvm_intrin(half_dtype, vpadd,
                                                             args_1, cnts8[i*2], cnts8[i*2+1])
                         for i in range(m//4):
-                            cnts2[i] = tvm.call_llvm_intrin('uint8x8', vpadd,
+                            cnts2[i] = tvm.call_llvm_intrin(half_dtype, vpadd,
                                                             args_1, cnts4[i*2], cnts4[i*2+1])
-                        cnts = tvm.call_pure_intrin('uint8x16', 'vectorcombine', cnts2[0], cnts2[1])
+                        cnts = tvm.call_pure_intrin(full_dtype, 'vectorcombine', cnts2[0], cnts2[1])
                         shifted_cnts = cnts << tvm.const(bw+bx, dtype)
-                        out = tvm.call_llvm_intrin('uint16x8', vpadalu,
-                                                   args_2, zz.vload(0, 'uint16x8'), shifted_cnts)
+                        out = tvm.call_llvm_intrin(return_dtype, vpadalu,
+                                                   args_2, zz.vload(0, return_dtype), shifted_cnts)
                     else: # ki == 8
                         for i in range(m):
-                            ands = ww.vload([bw, i, 0], 'uint8x8') & xx.vload([bx, 0], 'uint8x8')
-                            cnts8[i] = tvm.popcount(ands)
+                            w_ = ww.vload([bw, i, 0], 'uint8x8').astype(half_dtype)
+                            x_ = xx.vload([bx, 0], 'uint8x8').astype(half_dtype)
+                            if dorefa:
+                                cnts8[i] = tvm.popcount(w_ & x_) - tvm.popcount(~w_ & x_)
+                            else:
+                                cnts8[i] = tvm.popcount(w_ & x_)
                         for i in range(m//2):
-                            cnts4[i] = tvm.call_llvm_intrin('uint8x8', vpadd,
+                            cnts4[i] = tvm.call_llvm_intrin(half_dtype, vpadd,
                                                             args_1, cnts8[i*2], cnts8[i*2+1])
                         for i in range(m//4):
-                            cnts2[i] = tvm.call_llvm_intrin('uint8x8', vpadd,
+                            cnts2[i] = tvm.call_llvm_intrin(half_dtype, vpadd,
                                                             args_1, cnts4[i*2], cnts4[i*2+1])
-                        cnts = tvm.call_pure_intrin('uint8x16', 'vectorcombine', cnts2[0], cnts2[1])
+                        cnts = tvm.call_pure_intrin(full_dtype, 'vectorcombine', cnts2[0], cnts2[1])
                         shifted_cnts = cnts << tvm.const(bw+bx, dtype)
-                        out = tvm.call_llvm_intrin('uint16x8', vpadalu,
-                                                   args_2, zz.vload(0, 'uint16x8'), shifted_cnts)
+                        out = tvm.call_llvm_intrin(return_dtype, vpadalu,
+                                                   args_2, zz.vload(0, return_dtype), shifted_cnts)
                     irb.emit(zz.vstore(0, out))
             return irb.get()
         # body, reset, update
@@ -272,7 +306,7 @@ def _intrin_popcount(m, k_i, w_b, x_b):
 # ARM specific schedule that using custom microkernel
 def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
                                   kernel, kernel_q, kernel_vec,
-                                  conv_out, output, last):
+                                  conv_out, output, last, dorefa):
     # no stride and padding info here
     _, H, W, IB, CI = data_q.shape
     KH, KW, KB, _, CO = kernel_q.shape
@@ -358,7 +392,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci_o, kb, ib, vc, ci_i])
     kfactor = cfg['tile_ci'].size[1]
 
-    pc = _intrin_popcount(vc_len, kfactor, KB, IB)
+    pc = _intrin_popcount(vc_len, kfactor, KB, IB, dorefa)
     s[conv_out].tensorize(kb, pc)    
     n, h, w, co = s[last].op.axis
     co, vc = s[last].split(co, VC)
@@ -419,9 +453,9 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             if "QuantizeInput" in data.op.name:
                 # Need to go up 1 further, from the combine in bitpack
                 data = data.op.input_tensors[0]
-
+            dorefa = "dorefa" in conv_out.op.tag
             _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
-                                          kernel, kernel_q, kernel_vec, conv_out, output, outs[0])
+                                          kernel, kernel_q, kernel_vec, conv_out, output, outs[0], dorefa)
         scheduled_ops.append(op)
 
     traverse(outs[0].op)

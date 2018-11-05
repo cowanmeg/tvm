@@ -120,8 +120,8 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     w = tvm.nd.array(w_np, ctx)
     b = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
     func = tvm.build(s, [A, W, B], target)
-    func.save(os.path.join(os.getcwd(), 'conv.ll'))
-    func.save(os.path.join(os.getcwd(), 'conv.asm'))
+    # func.save(os.path.join(os.getcwd(), 'conv.ll'))
+    # func.save(os.path.join(os.getcwd(), 'conv.asm'))
     # Upload to pi
     temp = util.tempdir()
     path = temp.relpath('conv_nhwc.o')
@@ -204,12 +204,12 @@ def test_bitserial_conv2d():
     pad = 1
     in_dtype = 'uint8'
     pack_dtype = 'uint32'
-    out_dtype = 'uint16'
-    dorefa = False
+    out_dtype = 'int16'
+    dorefa = True
 
-    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
+    # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
 
-    verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, True)
@@ -217,9 +217,9 @@ def test_bitserial_conv2d():
 
     pack_dtype = 'uint8'
     # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
-    # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc')
 
-    # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 

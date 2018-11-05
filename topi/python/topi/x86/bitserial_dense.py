@@ -1,18 +1,19 @@
 """Schedule for bitserial dense operator."""
 from __future__ import absolute_import as _abs
 import tvm
+import topi
 from tvm import autotvm
 from .. import tag
 from .. import generic
 from ..nn import bitserial_dense_topi
 from topi.util import get_const_tuple, get_const_int
+from tvm.autotvm.task.nnvm_integration import deserialize_args
 
 @autotvm.task.register("topi_x86_bitserial_dense")
 def _topi_bitserial_dense(*args, **kwargs):
-    cfg = autotvm.task.get_config()
-    print (args)
-    C = bitserial_dense_topi(cfg, *args, **kwargs)
-    s = schedule_bitserial_dense(cfg, [C])
+    args = deserialize_args(args)
+    C = topi.nn.bitserial_dense(*args, **kwargs)
+    s = generic.nn.schedule_bitserial_dense([C])
     data = args[0]
     kernel = args[1]
     return s, [data, kernel, C]

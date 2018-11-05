@@ -13,7 +13,6 @@ TRIALS = 10
 target = tvm.target.create('llvm -target=x86_64-linux-gnu -mcpu=core-avx2')
 device_key = 'x86'
 log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_conv2d_x86.log'
-print (log_file)
 
 tuning_option = {
     'log_filename': log_file,

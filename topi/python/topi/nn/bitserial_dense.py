@@ -9,11 +9,11 @@ from .bitserial_conv2d import bitpack # Pull out into a utility function?
 # @tvm.target.override_native_generic_func("bitserial_dense")
 @tvm.target.generic_func
 def bitserial_dense(data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa):
-    return _bitserial_dense(cfg, data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa)
+    return bitserial_dense_generic(data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa)
 
 
-@autotvm.register_topi_compute(bitserial_dense, ['cpu', 'arm_cpu'], 'direct')
-def bitserial_dense_topi(cfg, data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa):
+@autotvm.register_topi_compute(bitserial_dense, ['cpu'], 'direct')
+def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa):
     """The default implementation of bitserial dense in topi.
 
     Parameters
@@ -24,9 +24,6 @@ def bitserial_dense_topi(cfg, data, weight, data_bits, weight_bits, pack_dtype, 
     weight : tvm.Tensor
         2-D with shape [out_dim, in_dim]
 
-    bias : tvm.Tensor, optional
-        1-D with shape [out_dim]
-
     Returns
     -------
     output : tvm.Tensor
@@ -34,25 +31,67 @@ def bitserial_dense_topi(cfg, data, weight, data_bits, weight_bits, pack_dtype, 
     """
     assert len(data.shape) == 2 and len(weight.shape) == 2, \
         "only support 2-dim dense"
-    # if bias is not None:
-    #     assert len(bias.shape) == 1
-    data_q = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type='uint32')
-    weight_q = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type='uint32')
-    batch, _, in_dim = get_const_tuple(data_q.shape)
-    out_dim, _, _ = get_const_tuple(weight_q.shape)
-    k = tvm.reduce_axis((0, in_dim), name='k')
-    db = tvm.reduce_axis((0, data_bits), name='db')
-    wb = tvm.reduce_axis((0, weight_bits), name='wb')
-    matmul = tvm.compute((batch, out_dim), 
+
+    data_packed = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    Y, DB, K = get_const_tuple(data_packed.shape)
+    X, WB, _ = get_const_tuple(weight_packed.shape)
+
+    ######## Search space
+    x, y = cfg.axis(X), cfg.axis(Y)
+    db, wb, k = cfg.reduce_axis(DB), cfg.reduce_axis(WB), cfg.reduce_axis(K)
+    ko, ki = cfg.define_split('tile_k', k, policy='all', num_outputs=2)
+    yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2)
+    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
+
+    cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, ki, xi], 
+                        policy='candidate', candidate=[
+                            [yo, xo, ko, yi, wb, db, ki, xi], 
+                            [yo, xo, yi, ko, wb, db, ki, xi]
+                        ])
+
+    cfg.define_annotate('ann_reduce', [db, wb], policy='try_unroll')
+    cfg.define_annotate('ann_spatial', [yi, xi], policy='try_unroll_vec')
+
+
+    ###### Compute rule
+    VX = cfg['tile_x'].size[-1]
+
+    wvshape = (X//VX, WB, VX, K)
+    oshape  = (Y, X)
+
+    k = tvm.reduce_axis((0, K), name='k')
+    db = tvm.reduce_axis((0, DB), name='db')
+    wb = tvm.reduce_axis((0, WB), name='wb')
+
+    # Tile data and weights
+    weight_vec = tvm.compute(wvshape, lambda xo, wb, vx, k:
+        weight_packed[xo*VX+vx][wb][k], name='weight_vec')
+
+    matmul_dorefa = tvm.compute(oshape, 
+        lambda i, j: tvm.sum( 
+                (tvm.popcount(weight_vec[j/VX, wb, j%VX, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)) - 
+                    tvm.popcount(~weight_vec[j/VX, wb, j%VX, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)))
+                    << (db+wb).astype(out_dtype), axis=[wb, db, k]), 
+        tag='bitserial_dense_dorefa')
+
+    matmul = tvm.compute(oshape, 
                          lambda i, j: tvm.sum( 
-                                ((tvm.popcount(data_q[i, db, k] & weight_q[j, wb, k]) - 
-                                 tvm.popcount(data_q[i, db, k] & ~weight_q[j, wb, k])) 
+                                tvm.popcount(weight_vec[j/VX, wb, j%VX, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)
                                  << (db+wb)).astype(out_dtype), axis=[db, wb, k]), 
                           tag='bitserial_dense')
-    cfg.add_flop(batch * out_dim * in_dim) # TODO fix to match packing type multiplier
 
-    # if bias is not None:
-    #     matmul = tvm.compute((batch, out_dim), \
-    #                          lambda i, j: matmul[i, j] + bias[j], \
-    #                          tag=tag.BROADCAST)
+    if (pack_dtype == 'uint8'):
+        binary_op_multiplier = 8
+    elif (pack_dtype == 'uint16'):
+        binary_op_multiplier = 16
+    elif (pack_dtype == 'uint32'):
+        binary_op_multiplier = 32
+    elif (pack_dtype == 'uint64'):
+        binary_op_multiplier = 64
+
+    cfg.add_flop(Y * X * K * binary_op_multiplier)
+
+    if dorefa:
+        return matmul_dorefa
     return matmul

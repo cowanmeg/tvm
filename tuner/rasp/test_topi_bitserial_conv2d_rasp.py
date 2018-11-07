@@ -217,9 +217,9 @@ def test_bitserial_conv2d():
 
     pack_dtype = 'uint8'
     # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
-    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc')
+    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc')
 
-    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 

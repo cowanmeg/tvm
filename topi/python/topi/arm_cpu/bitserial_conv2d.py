@@ -136,7 +136,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
 
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
-                                 filter=lambda x: x.size[-1] % 8 == 0)
+                                 filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
 
     re_axes = cfg.define_reorder("reorder_0",
                           [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
@@ -145,7 +145,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
                           [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                           [n, oh, ow, co, vh, vw, kw, kh, ci_o, kb, ib, vc, ci_i],
                           ])
-                          #interval=(3, 7))
     cfg.add_flop(2 * N * OH * OW * CO * CI * 8 * KH * KW)
 
     if cfg.is_fallback:

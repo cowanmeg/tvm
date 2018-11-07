@@ -12,10 +12,10 @@ from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
 from tvm.autotvm.task.nnvm_integration import serialize_args
 
 
-TRIALS = 10
-target = tvm.target.create('llvm -target=x86_64-linux-gnu -mcpu=core-avx2')
-device_key = 'x86'
-log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_dense_x86.log'
+TRIALS = 40
+target = tvm.target.create('llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon')
+device_key = 'rpi3b'
+log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_dense_rasp3b.log'
 
 tuning_option = {
     'log_filename': log_file,
@@ -26,7 +26,8 @@ tuning_option = {
     'measure_option': autotvm.measure_option(
         builder=autotvm.LocalBuilder(
             build_func='default'),
-        runner=autotvm.LocalRunner(
+        runner=autotvm.RPCRunner(
+            device_key, host='fleet', port=9190,
             number=5,
             timeout=5,
         ),
@@ -41,7 +42,7 @@ def generate_quantized_np(shape, bits, out_dtype):
 
 def verify_bitserial_dense(batch, in_dim, out_dim, data_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa):
     with autotvm.apply_history_best(log_file):
-        with tvm.target.create('llvm'):
+        with tvm.target.arm_cpu('rasp3b'):
             A = tvm.placeholder((batch, in_dim), dtype=in_dtype, name='A')
             W = tvm.placeholder((out_dim, in_dim), dtype=in_dtype, name='W')
             B = topi.nn.bitserial_dense(A, W, data_bits, weight_bits, pack_dtype, out_dtype, dorefa)
@@ -62,11 +63,20 @@ def verify_bitserial_dense(batch, in_dim, out_dim, data_bits, weight_bits, in_dt
         return a_np, w_np, b_np
     a_np, w_np, b_np = get_ref_data()
 
-    ctx = tvm.cpu(0)
+    remote = autotvm.measure.request_remote("rasp3b", 'localhost', 9190, timeout=10)
+    ctx = remote.context(str(target), 0)
     a = tvm.nd.array(a_np, ctx)
     w = tvm.nd.array(w_np, ctx)
     b = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
-    func = tvm.build(s, [A, W, B], "llvm")
+    func = tvm.build(s, [A, W, B], target)
+
+     # upload to rpi
+    temp = util.tempdir()
+    path = temp.relpath('dense.o')
+    func.save(path)
+    remote.upload(path)
+    func = remote.load_module('dense.o')
+
     func(a, w, b)
     np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
 
@@ -121,7 +131,7 @@ def tune_and_evaluate(batch, in_dim, out_dim, activation_bits, weight_bits, in_d
     W = tvm.placeholder((out_dim, in_dim), dtype=in_dtype, name='W')
     args = [A, W, activation_bits, weight_bits, pack_dtype, out_dtype, dorefa]
     args = serialize_args(args)
-    task = autotvm.task.create("topi_x86_bitserial_dense",
+    task = autotvm.task.create("topi_arm_cpu_bitserial_dense",
                     args=args, target=target, template_key='direct')
     print (task.config_space)
     # run tuning tasks
@@ -135,12 +145,12 @@ def test_bitserial_dense(batch, in_dim, out_dim):
     out_dtype = 'int16'
     dorefa = True
 
-    tune_and_evaluate(batch, in_dim, out_dim, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    tune_and_evaluate(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
 
-    verify_bitserial_dense(batch, in_dim, out_dim, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
 
 if __name__ == "__main__":
     # test_bitserial_dense(1, 1024, 1000)
-    test_bitserial_dense(1, 1024, 10)
+    test_bitserial_dense(32, 256, 64)
 

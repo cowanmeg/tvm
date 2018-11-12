@@ -380,6 +380,8 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     channels = attrs.get_int("channels")
     layout = attrs["layout"]
     dilation = attrs.get_int_tuple("dilation")
+    pack_dtype = 'uint8'
+    dorefa = True # TEMP fix these
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
@@ -387,8 +389,10 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     assert layout == "NCHW" or layout == "NHWC"
     assert dilation == (1, 1), "not support dilate now"
     if groups == 1:
-        out = topi.nn.bitserial_conv2d(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, layout=layout,
-                              out_dtype=out_dtype)
+        if layout == 'NHWC':
+            out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+        else:
+            out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
     else:
         raise ValueError("not support arbitrary group number for now")
     if attrs.get_bool("use_bias"):

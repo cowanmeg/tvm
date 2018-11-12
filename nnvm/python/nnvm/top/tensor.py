@@ -276,3 +276,11 @@ reg.register_schedule("less", _fschedule_elemwise)
 reg.register_compute("block_grad", _compute_unary(topi.identity))
 reg.register_pattern("block_grad", OpPattern.ELEMWISE)
 reg.register_schedule("block_grad", _fschedule_elemwise)
+
+# channel wise clip
+reg.register_pattern("clip_channelwise", OpPattern.BROADCAST)
+reg.register_schedule("clip_channelwise", _fschedule_broadcast)
+
+# channel wise right shift
+reg.register_pattern("right_shift_channelwise", OpPattern.BROADCAST)
+reg.register_schedule("right_shift_channelwise", _fschedule_broadcast)

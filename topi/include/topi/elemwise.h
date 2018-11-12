@@ -95,6 +95,30 @@ inline Tensor clip(const Tensor& x,
   }, name, tag);
 }
 
+inline Tensor clip_channelwise(const Tensor& x,
+                   const Tensor& a_min,
+                   const Tensor& a_max,
+                   const int axis = 1,
+                   std::string name = "tensor",
+                   std::string tag = kBroadcast) {
+  return compute(x->shape, [&](const Array<Var>& i) {
+    auto min_val = tvm::cast(x->dtype, a_min(i[axis]));
+    auto max_val = tvm::cast(x->dtype, a_max(i[axis]));
+    return tvm::max(tvm::min(x(i), max_val), min_val);  // NOLINT(*)
+  }, name, tag);
+}
+
+inline Tensor right_shift_channelwise(const Tensor& x,
+                   const Tensor& shift,
+                   const int axis = 1,
+                   std::string name = "tensor",
+                   std::string tag = kBroadcast) {
+  return compute(x->shape, [&](const Array<Var>& i) {
+    auto s = tvm::cast(x->dtype, shift(i[axis]));
+    return x(i) >> s;  // NOLINT(*)
+  }, name, tag);
+}
+
 /*!
  * \brief Cast each element of x to the given type. If expr is
  * scalar and type is a corresponding vector type, a

@@ -1,5 +1,6 @@
 """Example code to do bitserial dense."""
 import os
+import sys
 import numpy as np
 import tvm
 import topi
@@ -11,8 +12,7 @@ from tvm import autotvm
 from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
 from tvm.autotvm.task.nnvm_integration import serialize_args
 
-
-TRIALS = 40
+DEFAULT_TRIALS = 10
 target = tvm.target.create('llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon')
 device_key = 'rpi3b'
 log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_dense_rasp3b.log'
@@ -83,7 +83,7 @@ def verify_bitserial_dense(batch, in_dim, out_dim, data_bits, weight_bits, in_dt
 def tune_tasks(tsk,
                measure_option,
                tuner='xgb',
-               n_trial=TRIALS,
+               n_trial=10,
                early_stopping=None,
                log_filename='tuning.log',
                use_transfer_learning=True):
@@ -123,9 +123,9 @@ def tune_tasks(tsk,
 
     # pick best records to a cache file
     autotvm.record.pick_best(tmp_log_file, log_filename)
-    os.remove(tmp_log_file)
+    # os.remove(tmp_log_file)
 
-def tune_and_evaluate(batch, in_dim, out_dim, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa):
+def tune_and_evaluate(batch, in_dim, out_dim, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, trials):
 
     A = tvm.placeholder((batch, in_dim), dtype=in_dtype, name='A')
     W = tvm.placeholder((out_dim, in_dim), dtype=in_dtype, name='W')
@@ -137,20 +137,22 @@ def tune_and_evaluate(batch, in_dim, out_dim, activation_bits, weight_bits, in_d
     # run tuning tasks
     print("Tuning...")
     print (task)
-    tune_tasks(task, **tuning_option)
+    tune_tasks(task, **tuning_option, n_trial=trials)
 
-def test_bitserial_dense(batch, in_dim, out_dim):
+def test_bitserial_dense(trials):
     in_dtype = 'uint8'
     pack_dtype='uint8'
     out_dtype = 'int16'
     dorefa = True
 
-    tune_and_evaluate(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    tune_and_evaluate(32, 256, 64, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa, trials)
 
-    verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
-    # verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_dense(32, 256, 62, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
 
 if __name__ == "__main__":
-    # test_bitserial_dense(1, 1024, 1000)
-    test_bitserial_dense(32, 256, 64)
+    if len(sys.argv) == 2:
+        trials = int(sys.argv[1])
+    else:
+        trials = DEFAULT_TRIALS
+    test_bitserial_dense(trials)
 

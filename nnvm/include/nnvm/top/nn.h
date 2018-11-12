@@ -91,6 +91,7 @@ struct LeakyReLUParam : public dmlc::Parameter<LeakyReLUParam> {
   }
 };
 
+// Shared by channel wise clip
 struct PReLUParam : public dmlc::Parameter<PReLUParam> {
   int axis;
   DMLC_DECLARE_PARAMETER(PReLUParam) {

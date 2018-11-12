@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import tvm
 import topi
@@ -11,7 +12,7 @@ from topi.util import get_const_tuple
 from tvm.contrib import util
 from tvm.autotvm.task.nnvm_integration import serialize_args
 
-TRIALS = 10
+DEFAULT_TRIALS = 10
 target = tvm.target.create('llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon')
 device_key = 'rpi3b'
 log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_conv2d_rasp3b.log'
@@ -135,7 +136,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
 def tune_tasks(tsk,
                measure_option,
                tuner='xgb',
-               n_trial=TRIALS,
+               n_trial=10,
                early_stopping=None,
                log_filename='tuning.log',
                use_transfer_learning=True):
@@ -175,10 +176,10 @@ def tune_tasks(tsk,
 
     # pick best records to a cache file
     autotvm.record.pick_best(tmp_log_file, log_filename)
-    os.remove(tmp_log_file)
+    # os.remove(tmp_log_file)
 
 def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, padding,
-                        activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, layout):
+                        activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, layout, trials):
     in_height = in_width = in_size
     with tvm.target.arm_cpu("rasp3b"):
         if layout == 'nchw':
@@ -192,16 +193,19 @@ def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, pa
         task = autotvm.task.create("topi_arm_cpu_bitserial_conv_" + layout,
                        args=args, target=target, template_key='direct')
     # run tuning tasks
+    print (task.config_space)
     print("Tuning...")
-    tune_tasks(task, **tuning_option)
+    tune_tasks(task, **tuning_option, n_trial=trials)
 
 
-def test_bitserial_conv2d():
+def test_bitserial_conv2d(trials):
     in_size = 56
     ic, oc = 64, 64
     k = 3
     stride = 1
     pad = 1
+    activation_bits = 2
+    weight_bits = 1
     in_dtype = 'uint8'
     pack_dtype = 'uint32'
     out_dtype = 'int16'
@@ -217,11 +221,16 @@ def test_bitserial_conv2d():
 
     pack_dtype = 'uint8'
     # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
-    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc')
+    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc', trials)
+    tune_and_evaluate(1, 56, 64, 64, 1, 1, 0, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc', trials)
 
     verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 
 if __name__ == "__main__":
-    test_bitserial_conv2d()
+    if len(sys.argv) == 2:
+        trials = int(sys.argv[1])
+    else:
+        trials = DEFAULT_TRIALS
+    test_bitserial_conv2d(trials)

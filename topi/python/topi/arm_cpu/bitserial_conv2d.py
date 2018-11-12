@@ -98,7 +98,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC):
 # TODO: support kernel prepacking and fallback support
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits, 
-                      pack_dtype, out_dtype, dorefa):
+                      pack_dtype, out_dtype, dorefa, shift=None):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     # wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
@@ -376,23 +376,15 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
     dh, dw, kb, ib, ci = s[conv_out].op.reduce_axis
 
-    ci_len = cfg.axis(ci).length
-    vc_len = cfg.axis(vc).length
-    # if ci_len == 8 or ci_len == 16:
-    #     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, kb, ib, vc, ci])
-    #     kfactor = ci_len
-    # else: #TODO need to check this reorder
-    #     # Need to split ci to match the tensorize pattern (ci_i = 8 or 16)
-    #      # oci, ici = s[conv_out].split(ci, kfactor)
-    #     # s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, oci, kb, ib, vc, ici)
 
     ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
-
     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci_o, kb, ib, vc, ci_i])
+    
+    vc_len = cfg.axis(vc).length
     kfactor = cfg['tile_ci'].size[1]
-
     pc = _intrin_popcount(vc_len, kfactor, KB, IB, dorefa)
     s[conv_out].tensorize(kb, pc)    
+    
     n, h, w, co = s[last].op.axis
     co, vc = s[last].split(co, VC)
     oh, ow, vh, vw = s[last].tile(h, w, VH, VW)

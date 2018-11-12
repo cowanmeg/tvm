@@ -760,5 +760,92 @@ NNVM_REGISTER_OP(l2_normalize)
 .set_attr<FCorrectLayout>("FCorrectLayout", ElemwiseArbitraryLayout<1, 1>)
 .set_support_level(1);
 
+// channel wise clip
+inline bool ClipChannelwiseInferShape(const nnvm::NodeAttrs &attrs,
+                                      std::vector<TShape> *in_shape,
+                                      std::vector<TShape> *out_shape) {
+  const PReLUParam &param = nnvm::get<PReLUParam>(attrs.parsed);
+  TShape dshape = in_shape->at(0);
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 0, dshape);
+
+  CHECK(size_t(param.axis) < dshape.Size())
+      << "Wrong axis ("  << param.axis << ")value.";
+
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 1, TShape({dshape[param.axis]}));
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 2, TShape({dshape[param.axis]}));
+  TShape oshape(dshape);
+  NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
+  return true;
+}
+
+NNVM_REGISTER_OP(clip_channelwise)
+.describe(R"code(clip with thresholds specified per channel
+
+)code" NNVM_ADD_FILELINE)
+.add_argument("data", "Tensor", "Input data.")
+.add_argument("a_min", "Tensor", "Input channelwise minimum.")
+.add_argument("a_max", "Tensor", "Input channelwise maximum.")
+.add_arguments(PReLUParam::__FIELDS__())
+.set_attr_parser(ParamParser<PReLUParam>)
+.set_num_inputs(3)
+.set_num_outputs(1)
+.set_attr<FInferShape>("FInferShape", ClipChannelwiseInferShape)
+.set_attr<FInferType>("FInferType", ElemwiseType<3, 1>)
+.set_attr<FCorrectLayout>("FCorrectLayout", ElemwiseFixedLayoutCopyToOut<3, 1>)
+.set_attr<FListInputNames>("FListInputNames", [](const NodeAttrs& attrs) {
+    return std::vector<std::string>{"data", "a_min", "a_max"};
+  })
+.set_attr<FTVMCompute>(
+  "FTVMCompute", [](const NodeAttrs& attrs,
+                    const Array<Tensor>& inputs,
+                    const Array<Tensor>& out_info) {
+    const PReLUParam& param = nnvm::get<PReLUParam>(attrs.parsed);
+    return Array<Tensor>{ topi::clip_channelwise(inputs[0], inputs[1], inputs[2], param.axis)};
+  })
+.set_support_level(1);
+
+
+// channel wise right shift
+inline bool RightShiftChannelwiseInferShape(const nnvm::NodeAttrs &attrs,
+                                      std::vector<TShape> *in_shape,
+                                      std::vector<TShape> *out_shape) {
+  const PReLUParam &param = nnvm::get<PReLUParam>(attrs.parsed);
+  TShape dshape = in_shape->at(0);
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 0, dshape);
+
+  CHECK(size_t(param.axis) < dshape.Size())
+      << "Wrong axis ("  << param.axis << ")value.";
+
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 1, TShape({dshape[param.axis]}));
+  TShape oshape(dshape);
+  NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
+  return true;
+}
+
+NNVM_REGISTER_OP(right_shift_channelwise)
+.describe(R"code(clip with thresholds specified per channel
+
+)code" NNVM_ADD_FILELINE)
+.add_argument("data", "Tensor", "Input data.")
+.add_argument("shift", "Tensor", "Input channelwise minimum.")
+.add_arguments(PReLUParam::__FIELDS__())
+.set_attr_parser(ParamParser<PReLUParam>)
+.set_num_inputs(2)
+.set_num_outputs(1)
+.set_attr<FInferShape>("FInferShape", RightShiftChannelwiseInferShape)
+.set_attr<FInferType>("FInferType", ElemwiseType<2, 1>)
+.set_attr<FCorrectLayout>("FCorrectLayout", ElemwiseFixedLayoutCopyToOut<2, 1>)
+.set_attr<FListInputNames>("FListInputNames", [](const NodeAttrs& attrs) {
+    return std::vector<std::string>{"data", "shift"};
+  })
+.set_attr<FTVMCompute>(
+  "FTVMCompute", [](const NodeAttrs& attrs,
+                    const Array<Tensor>& inputs,
+                    const Array<Tensor>& out_info) {
+    const PReLUParam& param = nnvm::get<PReLUParam>(attrs.parsed);
+    return Array<Tensor>{ topi::right_shift_channelwise(inputs[0], inputs[1], param.axis)};
+  })
+.set_support_level(1);
+
 }  // namespace top
 }  // namespace nnvm

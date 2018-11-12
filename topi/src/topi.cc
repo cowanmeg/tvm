@@ -165,6 +165,21 @@ TVM_REGISTER_GLOBAL("topi.clip")
   *rv = clip(args[0], args[1], args[2]);
   });
 
+TVM_REGISTER_GLOBAL("topi.clip_channelwise")
+.set_body([](TVMArgs args, TVMRetValue *rv) {
+  *rv = clip_channelwise(args[0], args[1], args[2], args[3]);
+  });
+
+// TVM_REGISTER_GLOBAL("topi.left_shift_channelwise")
+// .set_body([](TVMArgs args, TVMRetValue *rv) {
+//   *rv = left_shift_channelwise(args[0], args[1], args[2]);
+//   });
+
+TVM_REGISTER_GLOBAL("topi.right_shift_channelwise")
+.set_body([](TVMArgs args, TVMRetValue *rv) {
+  *rv = right_shift_channelwise(args[0], args[1], args[2]);
+  });
+
 TVM_REGISTER_GLOBAL("topi.cast")
 .set_body([](TVMArgs args, TVMRetValue *rv) {
   *rv = cast(args[0], args[1]);

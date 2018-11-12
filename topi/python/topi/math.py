@@ -3,6 +3,7 @@
 from __future__ import absolute_import as _abs
 import tvm
 from . import tag
+from .util import get_const_int
 
 @tvm.tag_scope(tag=tag.ELEMWISE)
 def identity(x):
@@ -228,6 +229,31 @@ def left_shift(x, n):
     """
     return tvm.compute(x.shape, lambda *i: x(*i) << n)
 
+@tvm.tag_scope(tag=tag.BROADCAST)
+def right_left_channelwise(x, n, axis=1):
+    """Take n bits left shift of input x.
+
+    Parameters
+    ----------
+    x : tvm.Tensor
+        Input argument.
+    n : tvm.Tensor
+        Channelised number of bits.
+    axis : in
+        The axis where the channel data needs to be applied
+
+    Returns
+    -------
+    y : tvm.Tensor
+        The result.
+    """
+    assert len(n.shape) == 1
+    assert axis < len(x.shape)
+    assert get_const_int(n.shape[0]) == get_const_int(x.shape[axis])
+
+    def _compute_channelwise(*indices):
+        return x(*indices) << n(indices[axis])
+    return tvm.compute(x.shape, _compute_channelwise)
 
 @tvm.tag_scope(tag=tag.ELEMWISE)
 def right_shift(x, n):
@@ -246,6 +272,32 @@ def right_shift(x, n):
         The result.
     """
     return tvm.compute(x.shape, lambda *i: x(*i) >> n)
+
+@tvm.tag_scope(tag=tag.BROADCAST)
+def right_shift_channelwise(x, n, axis=1):
+    """Take n bits right shift of input x.
+
+    Parameters
+    ----------
+    x : tvm.Tensor
+        Input argument.
+    n : tvm.Tensor
+        Channelised number of bits.
+    axis : in
+        The axis where the channel data needs to be applied
+
+    Returns
+    -------
+    y : tvm.Tensor
+        The result.
+    """
+    assert len(n.shape) == 1
+    assert axis < len(x.shape)
+    assert get_const_int(n.shape[0]) == get_const_int(x.shape[axis])
+
+    def _compute_channelwise(*indices):
+        return x(*indices) >> n(indices[axis])
+    return tvm.compute(x.shape, _compute_channelwise)
 
 
 @tvm.tag_scope(tag=tag.ELEMWISE)
@@ -273,6 +325,39 @@ def clip(x, a_min, a_max):
         const_max = tvm.const(a_max, value.dtype)
         return tvm.max(tvm.min(value, const_max), const_min)
     return tvm.compute(x.shape, _compute)
+
+@tvm.tag_scope(tag=tag.BROADCAST)
+def clip_channelwise(x, a_min, a_max, axis=1):
+    """Clip (limit) the values in an array. Given an interval, values
+    outside the interval are clipped to the interval edges.
+
+    Parameters
+    ----------
+    x : tvm.Tensor
+        Input argument.
+    a_min : tvm.Tensor
+        Channelised ,inimum value.
+    a_max : tvm.Tensor
+        Channelised maximum value.
+    axis : in
+        The axis where the channel data needs to be applied
+
+    Returns
+    -------
+    y : tvm.Tensor
+        The result.
+    """
+    assert len(a_min.shape) == 1 and len(a_max.shape) == 1
+    assert axis < len(x.shape)
+    assert get_const_int(a_max.shape[0]) == get_const_int(x.shape[axis])
+    assert get_const_int(a_min.shape[0]) == get_const_int(x.shape[axis])
+
+    def _compute_channelwise(*indices):
+        value = x(*indices)
+        const_min = a_min(indices[axis])
+        const_max = a_max(indices[axis])
+        return tvm.max(tvm.min(value, const_max), const_min)
+    return tvm.compute(x.shape, _compute_channelwise)
 
 
 def cast(x, dtype):

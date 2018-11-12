@@ -39,9 +39,6 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     output : tvm.Tensor
         2-D with shape [batch, out_dim]
     """
-    assert len(data.shape) == 2 and len(weight.shape) == 2, \
-        "only support 2-dim dense"
-
     data_packed = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
     weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
     Y, DB, K = get_const_tuple(data_packed.shape)
@@ -54,12 +51,13 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
                                 filter=lambda xx: xx.size[-1] == 8 or xx.size[-1] == 16)
     yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2)
     xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
-                                filter=lambda xx: xx.size[-1] == 8)
+                                filter=lambda xx: xx.size[-1] % 8 == 0)
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, xi, ki], 
                         policy='candidate', candidate=[
                             [yo, xo, ko, yi, wb, db, xi, ki], 
-                            [yo, xo, yi, ko, wb, db, xi, ki]
+                            [yo, xo, yi, ko, wb, db, xi, ki],
+                            [yo, yi, xo, ko, wb, db, xi, ki]
                         ])
 
     ###### Compute rule
@@ -125,7 +123,9 @@ def schedule_bitserial_dense(cfg, outs):
 
     def _schedule(cfg, s, data, weight, data_vec, weight_vec, output, dorefa):
         s[data_vec].parallel(s[data_vec].op.axis[0])
+        s[data_vec].vectorize(s[data_vec].op.axis[-1])
         s[weight_vec].parallel(s[weight_vec].op.axis[0])
+        # s[weight_vec].vectorize(s[weight_vec].op.axis[-1])
 
         y, x = s[output].op.axis
         wb, db, k = s[output].op.reduce_axis
@@ -138,7 +138,6 @@ def schedule_bitserial_dense(cfg, outs):
         ko, ki = cfg["tile_k"].apply(s, output, k)
         
         cfg["reorder_0"].apply(s, output, [yo, xo, ko, yi, wb, db, xi, ki])
-        
         
         nfactor = cfg['tile_x'].size[1]
         kfactor = cfg['tile_k'].size[1]

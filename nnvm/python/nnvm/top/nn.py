@@ -376,25 +376,20 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     """Compute definition of bitserial_conv2d"""
     padding = attrs.get_int_tuple("padding")
     strides = attrs.get_int_tuple("strides")
-    groups = attrs.get_int("groups")
     channels = attrs.get_int("channels")
     layout = attrs["layout"]
-    dilation = attrs.get_int_tuple("dilation")
-    pack_dtype = 'uint8'
+    pack_dtype = 'uint8' # TEMP hard coded
     dorefa = True # TEMP fix these
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
     #in_type = attrs["in_type"]
     assert layout == "NCHW" or layout == "NHWC"
-    assert dilation == (1, 1), "not support dilate now"
-    if groups == 1:
-        if layout == 'NHWC':
-            out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
-        else:
-            out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+    if layout == 'NHWC':
+        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
     else:
-        raise ValueError("not support arbitrary group number for now")
+        out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+
     if attrs.get_bool("use_bias"):
         bias = inputs[2]
         expand_axis = 1 if layout == "NCHW" else 0
@@ -405,13 +400,34 @@ def compute_bitserial_conv2d(attrs, inputs, _):
 @reg.register_schedule("bitserial_conv2d")
 def schedule_bitserial_conv2d(attrs, outs, target):
     """Schedule definition of bitserial_conv2d"""
-    groups = attrs.get_int("groups")
     layout = attrs["layout"]
     with tvm.target.create(target):
-        if groups == 1 and layout == "NCHW":
+        if layout == "NCHW":
             return topi.generic.schedule_bitserial_conv2d_nchw(outs)
-        elif groups == 1 and layout == "NHWC":
+        elif layout == "NHWC":
             return topi.generic.schedule_bitserial_conv2d_nhwc(outs)
         return None
-#TODO: not certain what pattern to use
 reg.register_pattern("bitserail_conv2d", OpPattern.OUT_ELEMWISE_FUSABLE)
+
+
+# bitserial dense
+@reg.register_compute("bitserial_dense")
+def compute_btiserial_dense(attrs, inputs, _):
+    """Compute definition of bitserial_dense"""
+    activation_bits = attrs.get_int("activation_bits")
+    weight_bits = attrs.get_int("weight_bits")
+    pack_dtype = 'uint8' # TEMP hard coded
+    out_dtype = attrs["out_dtype"]
+    dorefa = True # TEMP fix these
+    # if attrs.get_bool("use_bias"):
+    #     return topi.nn.bitserial_dense(inputs[0], inputs[1], bias=inputs[2])
+    return topi.nn.bitserial_dense(inputs[0], inputs[1], activation_bits,
+         weight_bits, pack_dtype, out_dtype, dorefa)
+
+@reg.register_schedule("bitserial_dense")
+def schedule_bitserial_dense(attrs, outs, target):
+    """Schedule definition of dense"""
+    with tvm.target.create(target):
+        return topi.generic.schedule_bitserial_dense(outs)
+
+reg.register_pattern("bitserial_dense", OpPattern.OUT_ELEMWISE_FUSABLE)

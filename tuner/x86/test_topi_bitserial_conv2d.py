@@ -9,7 +9,9 @@ from topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
 from tvm.autotvm.task.nnvm_integration import serialize_args
 
-TRIALS = 10
+np.random.seed(0)
+
+TRIALS = 25
 target = tvm.target.create('llvm -target=x86_64-linux-gnu -mcpu=core-avx2')
 device_key = 'x86'
 log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bitserial_conv2d_x86.log'
@@ -72,19 +74,19 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
     np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
 
 def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel, stride, padding,
-                        activation_bits, weight_bits, in_dtye, pack_dtype, out_dtype, dorefa):
+                        activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa):
     in_height = in_width = in_size
     with autotvm.apply_history_best(log_file):
         with tvm.target.create('llvm'):
             A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=in_dtype, name='A')
             W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=in_dtype, name='W')
             B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, padding, activation_bits, weight_bits, pack_dtype, out_dtype, dorefa)
+            # s = tvm.create_schedule(B.op)
             s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
     a_shape = get_const_tuple(A.shape)
     w_shape = get_const_tuple(W.shape)
 
-    @memoize("topi.tests.test_topi_bitseral_conv2d_nhwc")
     def get_ref_data():
         a_np = generate_quantized_np(get_const_tuple(a_shape), activation_bits, in_dtype)
         w_np = generate_quantized_np(get_const_tuple(w_shape), weight_bits, in_dtype)
@@ -105,6 +107,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     func = tvm.build(s, [A, W, B], 'llvm')
 
     func(a, w, b)
+    print(b)
     np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
 
 def tune_tasks(tsk,
@@ -172,21 +175,16 @@ def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, pa
     print (task)
     tune_tasks(task, **tuning_option)
 
-def test_bitserial_conv2d():
-    in_size = 56
-    ic, oc = 64, 64
-    k = 3
-    stride = 1
-    pad = 1
+def test_bitserial_conv2d(in_size, ic, oc, k, stride, pad):
     in_dtype = 'uint8'
-    pack_dtype = 'uint32'
-    out_dtype = 'uint16'
-    dorefa = False
+    pack_dtype = 'uint64' # TODO: Not working for pack dtypes of 32 and 64
+    out_dtype = 'int16'
+    dorefa = True
 
-    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, "nchw")
-    print ("verify")
+    # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa, "nhwc")
+    # print ("verify")
 
-    verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 2, 1, True)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, False)
     # verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
@@ -199,4 +197,5 @@ def test_bitserial_conv2d():
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 
 if __name__ == "__main__":
-    test_bitserial_conv2d()
+    # test_bitserial_conv2d(64, 32, 64, 3, 2, 1)
+    test_bitserial_conv2d(64, 64, 128, 3, 2, 1)

@@ -15,12 +15,13 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
     in_height = in_width = in_size
     input_type = 'uint32'
     out_dtype = 'int32'
+    pack_dtype = 'uint32'
 
     with tvm.target.create('llvm'):
         A = tvm.placeholder((batch, in_channel, in_height, in_width), dtype=input_type, name='A')
         W = tvm.placeholder((num_filter, in_channel, kernel, kernel), dtype=input_type, name='W')
-        B = topi.nn.bitserial_conv2d(A, W, stride, padding, activation_bits, weight_bits, 
-                                     out_dtype=out_dtype, layout="NCHW", dorefa=dorefa)
+        B = topi.nn.bitserial_conv2d_nchw(A, W, stride, padding, activation_bits, weight_bits, 
+                                     pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
         s = topi.generic.schedule_bitserial_conv2d_nchw([B])
 
     a_shape = get_const_tuple(A.shape)
@@ -53,12 +54,13 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     in_height = in_width = in_size
     input_type='uint32'
     out_dtype='int32'
+    pack_dtype='uint32'
 
     with tvm.target.create('llvm'):
         A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=input_type, name='A')
         W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=input_type, name='W')
-        B = topi.nn.bitserial_conv2d(A, W, stride, padding, activation_bits, weight_bits, out_dtype=out_dtype, 
-                                     layout="NHWC", dorefa=dorefa)
+        B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, padding, activation_bits, weight_bits, 
+                                    pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
         s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
     a_shape = get_const_tuple(A.shape)

@@ -78,7 +78,7 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     matmul = tvm.compute(oshape, 
                          lambda i, j: tvm.sum( 
                                 tvm.popcount(weight_vec[j/VX, wb, j%VX, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)
-                                 << (db+wb)).astype(out_dtype), axis=[db, wb, k]), 
+                                 << (db+wb)).astype(out_dtype), axis=[wb, db, k]), 
                           tag='bitserial_dense')
 
     if (pack_dtype == 'uint8'):

@@ -135,12 +135,12 @@ def test_bitserial_dense(batch, in_dim, out_dim):
     out_dtype = 'int16'
     dorefa = True
 
-    tune_and_evaluate(batch, in_dim, out_dim, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    tune_and_evaluate(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
 
-    verify_bitserial_dense(batch, in_dim, out_dim, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_dense(batch, in_dim, out_dim, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
 
 if __name__ == "__main__":
     # test_bitserial_dense(1, 1024, 1000)
-    test_bitserial_dense(1, 1024, 10)
+    test_bitserial_dense(1, 512, 10)
 

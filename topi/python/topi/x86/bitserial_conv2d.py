@@ -59,7 +59,7 @@ from tvm.autotvm.task.nnvm_integration import deserialize_args
 @autotvm.task.register("topi_x86_bitserial_conv_nhwc")
 def topi_bitserial_conv2d_nhwc(*args, **kwargs):
     args = deserialize_args(args)
-    C = topi.nn.bitserial_conv2d_nwhc(*args, **kwargs)
+    C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
     s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
     data = args[0]
     kernel = args[1]
@@ -257,11 +257,7 @@ def schedule_bitserial_conv2d_nchw(cfg, s, data, data_q, data_pad, data_vec,
         oaxis = oco
         paxis = ico
 
-    s[last].parallel(paxis)
-    s[last].pragma(oaxis, "parallel_launch_point")
-    s[last].pragma(paxis, "parallel_stride_pattern")
-    s[last].pragma(oaxis, "parallel_barrier_when_finish")
-
+    s[last].parallel(oco)
     return s
 
 def schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
@@ -272,18 +268,19 @@ def schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     KH, KW, _, CO, KB = kernel_q.shape
     _, OH, OW, _ = output.shape
     # Infer padding and stride
-    if data_pad is None:
-        padding = (0, 0)
-        TH, TW = IH, IW
-    else:
-        _, TH, TW, _, _ = data_pad.shape
-        hpad = get_const_int((TH - IH) // 2)
-        wpad = get_const_int((TW - IW) // 2)
-        padding = (hpad, wpad)
+    # if data_pad is None:
+    #     padding = (0, 0)
+    #     TH, TW = IH, IW
+    # else:
+    #     _, TH, TW, _, _ = data_pad.shape
+    #     print ("output shape", output.shape)
+    #     hpad = get_const_int((TH - IH) // 2)
+    #     wpad = get_const_int((TW - IW) // 2)
+    #     padding = (hpad, wpad)
 
-    hstride = get_const_int((TH - KH) // (OH - 1))
-    wstride = get_const_int((TW - KW) // (OW - 1))
-    stride = (hstride, wstride)
+    # hstride = get_const_int((TH - KH) // (OH - 1))
+    # wstride = get_const_int((TW - KW) // (OW - 1))
+    # stride = (hstride, wstride)
 
     # wkl = _get_workload(data, kernel, stride, padding, last.dtype, "NHWC")
     # sch = _get_schedule(wkl, "NHWC")
@@ -303,35 +300,13 @@ def schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     _, h, _, _, _, _, _ = s[data_vec].op.axis
     cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
     oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
-    if cfg["tile_ah"].size[1] == 1:
-        oaxis = oh
-        paxis = oh
-    else:
-        oaxis = oh
-        paxis = ih
-
-    s[data_vec].parallel(paxis)
-    s[data_vec].pragma(oaxis, "parallel_launch_point")
-    s[data_vec].pragma(paxis, "parallel_stride_pattern")
-    s[data_vec].pragma(oaxis, "parallel_barrier_when_finish")
-
+    s[data_vec].parallel(oh)
 
     ##### Schedule kernel packing
     co, _, _, _, _, _ = s[kernel_vec].op.axis
     cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
     oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
-    if cfg["tile_bco"].size[1] == 1:
-        oaxis = oco
-        paxis = oco
-    else:
-        oaxis = oco
-        paxis = ico
-
-    s[kernel_vec].parallel(paxis)
-    s[kernel_vec].pragma(oaxis, "parallel_launch_point")
-    s[kernel_vec].pragma(paxis, "parallel_stride_pattern")
-    s[kernel_vec].pragma(oaxis, "parallel_barrier_when_finish")
-
+    s[kernel_vec].parallel(oco)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
@@ -362,16 +337,6 @@ def schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     s[conv_out].compute_at(s[last], ow)
 
     oho, iho = cfg["tile_oh"].apply(s, last, oh)  # reuse parameter
-    if cfg["tile_oh"].size[1] == 1:
-        oaxis = oho
-        paxis = oho
-    else:
-        oaxis = oho
-        paxis = iho
-
-    s[last].parallel(paxis)
-    s[last].pragma(oaxis, "parallel_launch_point")
-    s[last].pragma(paxis, "parallel_stride_pattern")
-    s[last].pragma(oaxis, "parallel_barrier_when_finish")
+    s[last].parallel(oho)
 
     return s

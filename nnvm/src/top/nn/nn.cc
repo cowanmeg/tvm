@@ -118,6 +118,91 @@ If ``use_bias`` is set to be false, then the ``bias`` term is ignored.
 })
 .set_support_level(1);
 
+// bitserial dense
+DMLC_REGISTER_PARAMETER(BitserialDenseParam);
+
+inline bool BitserialDenseInferShape(const nnvm::NodeAttrs& attrs,
+                            std::vector<TShape>* in_shape,
+                            std::vector<TShape>* out_shape) {
+  const BitserialDenseParam& param = nnvm::get<BitserialDenseParam>(attrs.parsed);
+  if (param.use_bias) {
+    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, weight, bias]";
+  } else {
+    CHECK_EQ(in_shape->size(), 2U) << "Input:[data, weight]";
+  }
+  CHECK_EQ(out_shape->size(), 1U);
+  // reverse infer
+  if ((*out_shape)[0].ndim() != 0) {
+    TShape dshape = (*out_shape)[0];
+    dshape[dshape.ndim() - 1] = 0;
+    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kData, dshape);
+  }
+  dim_t num_inputs = 0;
+  if ((*in_shape)[DenseParam::kData].ndim() != 0) {
+    TShape oshape = (*in_shape)[DenseParam::kData];
+    num_inputs = oshape[oshape.ndim() - 1];
+    oshape[oshape.ndim() - 1] = param.units;
+    NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
+  }
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kWeight,
+                          TShape({param.units, num_inputs}));
+  if (param.use_bias) {
+    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kBias, TShape({param.units}));
+  }
+  return true;
+}
+
+inline bool BitserialDenseInferType(const nnvm::NodeAttrs& attrs,
+                            std::vector<int>* in_type,
+                            std::vector<int>* out_type) {
+  const BitserialDenseParam& param = nnvm::get<BitserialDenseParam>(attrs.parsed);
+  if (param.use_bias) {
+    CHECK_EQ(in_type->size(), 3U) << "Input:[data, weight, bias]";
+  } else {
+    CHECK_EQ(in_type->size(), 2U) << "Input:[data, weight]";
+  }
+  CHECK_EQ(out_type->size(), 1U);
+  if (param.out_dtype != -1) {
+    CHECK(!type_is_none((*in_type)[0]));
+    for (size_t i = 1; i < in_type->size(); ++i) {
+      NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, (*in_type)[0]);
+    }
+    NNVM_ASSIGN_OUTPUT_TYPE(attrs, *out_type, 0, param.out_dtype);
+  } else {
+    ElemwiseType<-1, 1>(attrs, in_type, out_type);
+  }
+  return true;
+}
+
+
+NNVM_REGISTER_OP(bitserial_dense)
+.describe(R"code(Applies a linear transformation: :math:`Y = XW^T + b`.
+
+- **data**: `(x1, x2, ..., xn, input_dim)`
+- **weight**: `(units, input_dim)`
+- **bias**: `(units,)`
+- **out**: `(x1, x2, ..., xn, units)`
+
+The learnable parameters include both ``weight`` and ``bias``.
+
+If ``use_bias`` is set to be false, then the ``bias`` term is ignored.
+
+)code" NNVM_ADD_FILELINE)
+.add_argument("data", "nD Tensor", "Input data.")
+.add_argument("weight", "2D Tensor", "Weight matrix.")
+.add_argument("bias", "1D Tensor", "Bias parameter.")
+.add_arguments(BitserialDenseParam::__FIELDS__())
+.set_attr_parser(ParamParser<BitserialDenseParam>)
+.set_attr<FGetAttrDict>("FGetAttrDict", ParamGetAttrDict<BitserialDenseParam>)
+.set_num_outputs(1)
+.set_num_inputs(UseBiasNumInputs<BitserialDenseParam>)
+.set_attr<FListInputNames>("FListInputNames", UseBiasListInputNames<BitserialDenseParam>)
+.set_attr<FInferShape>("FInferShape", BitserialDenseInferShape)
+.set_attr<FInferType>("FInferType", BitserialDenseInferType)
+// leave weight & bias layout undefined
+.set_attr<FCorrectLayout>("FCorrectLayout", ElemwiseFixedLayoutCopyToOut<1, 1>)
+.set_support_level(1);
+
 // relu
 NNVM_REGISTER_ELEMWISE_UNARY_OP(relu)
 .describe(R"code(Computes rectified linear.
@@ -767,10 +852,8 @@ inline bool ClipChannelwiseInferShape(const nnvm::NodeAttrs &attrs,
   const PReLUParam &param = nnvm::get<PReLUParam>(attrs.parsed);
   TShape dshape = in_shape->at(0);
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 0, dshape);
-
   CHECK(size_t(param.axis) < dshape.Size())
       << "Wrong axis ("  << param.axis << ")value.";
-
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 1, TShape({dshape[param.axis]}));
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, 2, TShape({dshape[param.axis]}));
   TShape oshape(dshape);

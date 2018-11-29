@@ -32,6 +32,33 @@ struct DenseParam : public dmlc::Parameter<DenseParam> {
   static const constexpr int kBias = 2;
 };
 
+struct BitserialDenseParam : public dmlc::Parameter<BitserialDenseParam> {
+  int units;
+  bool use_bias;
+  int out_dtype;
+  int activation_bits;
+  int weight_bits;
+
+  DMLC_DECLARE_PARAMETER(BitserialDenseParam) {
+    DMLC_DECLARE_FIELD(units).set_lower_bound(1)
+    .describe("Number of hidden units of the dense transformation.");
+    DMLC_DECLARE_FIELD(use_bias).set_default(false)
+    .describe("Whether to use bias parameter");
+    DMLC_DECLARE_DTYPE_FIELD(out_dtype)
+    .add_enum("same", -1)
+    .set_default(-1)
+    .describe("Output data type, set to explicit type under mixed precision setting");
+    DMLC_DECLARE_FIELD(weight_bits).set_default(1)
+    .describe("Bitserial: Number of bits for the kernel.");
+    DMLC_DECLARE_FIELD(activation_bits).set_default(2)
+    .describe("Bitserial: Number of bits for acitvations/data.");
+  }
+  // constants
+  static const constexpr int kData = 0;
+  static const constexpr int kWeight = 1;
+  static const constexpr int kBias = 2;
+};
+
 struct DropoutParam : public dmlc::Parameter<DropoutParam> {
   float rate;
 
@@ -125,8 +152,6 @@ struct Conv2DParam : public dmlc::Parameter<Conv2DParam> {
   std::string kernel_layout;
   std::string out_layout;
   int out_dtype;
-  int activation_bits;
-  int weight_bits;
   bool use_bias;
 
   DMLC_DECLARE_PARAMETER(Conv2DParam) {
@@ -165,12 +190,61 @@ struct Conv2DParam : public dmlc::Parameter<Conv2DParam> {
       .add_enum("same", -1)
       .set_default(-1)
       .describe("Output data type, set to explicit type under mixed precision setting");
-    DMLC_DECLARE_FIELD(weight_bits).set_default(-1)
-      .describe("Bitserial: Number of bits for the kernel.");
-    DMLC_DECLARE_FIELD(activation_bits).set_default(-1)
-      .describe("Bitserial: Number of bits for acitvations/data.");
-
     DMLC_DECLARE_FIELD(use_bias).set_default(true)
+      .describe("Whether the layer uses a bias vector.");
+  }
+  // constants
+  static const constexpr int kData = 0;
+  static const constexpr int kWeight = 1;
+  static const constexpr int kBias = 2;
+};
+
+struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
+  int channels;
+  TShape kernel_size;
+  TShape strides;
+  TShape padding;
+  std::string layout;
+  std::string kernel_layout;
+  std::string out_layout;
+  int out_dtype;
+  int activation_bits;
+  int weight_bits;
+  bool use_bias;
+
+  DMLC_DECLARE_PARAMETER(BitserialConv2DParam) {
+    DMLC_DECLARE_FIELD(channels)
+      .describe("The dimensionality of the output space"
+                "i.e. the number of output channels in the convolution.");
+    DMLC_DECLARE_FIELD(kernel_size)
+      .describe("Specifies the dimensions of the convolution window.");
+    DMLC_DECLARE_FIELD(strides).set_default(TShape({1, 1}))
+      .describe("Specifies the strides of the convolution.");
+    DMLC_DECLARE_FIELD(padding).set_default(TShape({0, 0}))
+      .describe("If padding is non-zero, then the input is implicitly zero-padded"
+                "on both sides for padding number of points");
+    DMLC_DECLARE_FIELD(layout).set_default("NCHW")
+      .describe("Dimension ordering of input data. Can be 'NCHW', 'NHWC', etc."
+                "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                "dimensions respectively. Convolution is applied on the 'H' and"
+                "'W' dimensions.");
+    DMLC_DECLARE_FIELD(out_layout).set_default("__undef__")
+      .describe("Dimension ordering of output. Can be 'NCHW', 'NHWC', etc."
+                "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                "dimensions respectively. Default to be same as input layout.");
+    DMLC_DECLARE_FIELD(kernel_layout).set_default("OIHW")
+      .describe("Dimension ordering of weight. Can be 'OIHW', 'OIHW16o16i', etc."
+                "'O', 'I', 'H', 'W' stands for num_filter, input_channel, height, and width"
+                "dimensions respectively.");
+    DMLC_DECLARE_DTYPE_FIELD(out_dtype)
+      .add_enum("same", -1)
+      .set_default(-1)
+      .describe("Output data type, set to explicit type under mixed precision setting");
+    DMLC_DECLARE_FIELD(weight_bits).set_default(1)
+      .describe("Bitserial: Number of bits for the kernel.");
+    DMLC_DECLARE_FIELD(activation_bits).set_default(2)
+      .describe("Bitserial: Number of bits for acitvations/data.");
+    DMLC_DECLARE_FIELD(use_bias).set_default(false)
       .describe("Whether the layer uses a bias vector.");
   }
   // constants

@@ -101,12 +101,14 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
                       pack_dtype, out_dtype, dorefa, shift=None):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
+    assert pack_dtype == 'uint8', "only support packing into 8 bits"
     # wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
     # sch = _get_schedule(wkl, "NHWC")
     
     N, H, W, CI = get_const_tuple(data.shape)
     KH, KW, _, CO = get_const_tuple(kernel.shape)
     # OCO, KH, KW, KB, VC, _ = kernel_vec.shape
+    CI_packed = CI // 8
 
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
 
@@ -124,7 +126,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
 
     # ==================== define configuration space ====================
     n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
-    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+    ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
     ib, kb = cfg.reduce_axis(activation_bits), cfg.reduce_axis(weight_bits)
 
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
@@ -134,10 +136,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
                        filter=lambda x: max(x.size[1:]) <= 16)
     cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
-
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
                                  filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
-
     re_axes = cfg.define_reorder("reorder_0",
                           [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                           policy='candidate', 
@@ -214,7 +214,7 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
     else:
         z = tvm.compute((m,), lambda i:
                     tvm.sum(tvm.popcount(w[bw, i, k].astype('uint16') & x[bx, k].astype('uint16'))
-                            << (bw+bx).astype('int16'), axis=[bw, bx, k]), name='z')
+                            << (bw+bx).astype('uint16'), axis=[bw, bx, k]), name='z')
 
     Wb = tvm.decl_buffer(w.shape, w.dtype,
                          name="W",
@@ -374,17 +374,16 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
-    dh, dw, kb, ib, ci = s[conv_out].op.reduce_axis
-
+    kh, kw, kb, ib, ci = s[conv_out].op.reduce_axis
 
     ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
-    re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, dh, dw, ci_o, kb, ib, vc, ci_i])
+    re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
     
     vc_len = cfg.axis(vc).length
     kfactor = cfg['tile_ci'].size[1]
     pc = _intrin_popcount(vc_len, kfactor, KB, IB, dorefa)
-    s[conv_out].tensorize(kb, pc)    
-    
+    s[conv_out].tensorize(kb, pc)  
+
     n, h, w, co = s[last].op.axis
     co, vc = s[last].split(co, VC)
     oh, ow, vh, vw = s[last].tile(h, w, VH, VW)

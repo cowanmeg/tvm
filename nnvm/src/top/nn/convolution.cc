@@ -27,7 +27,6 @@ namespace top {
 
 // conv2d
 DMLC_REGISTER_PARAMETER(Conv2DParam);
-
 inline bool Conv2DInferShape(const nnvm::NodeAttrs& attrs,
                              std::vector<TShape>* in_shape,
                              std::vector<TShape>* out_shape) {
@@ -127,6 +126,73 @@ inline bool Conv2DInferShape(const nnvm::NodeAttrs& attrs,
     CHECK_LE(dilated_ksize_x, dshape[3] + 2 * param.padding[1])
         << "kernel size exceed input";
   }
+  return true;
+}
+
+DMLC_REGISTER_PARAMETER(BitserialConv2DParam);
+inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
+                             std::vector<TShape>* in_shape,
+                             std::vector<TShape>* out_shape) {
+  const BitserialConv2DParam& param = nnvm::get<BitserialConv2DParam>(attrs.parsed);
+
+  const Layout in_layout(param.layout);
+  const Layout kernel_layout(param.kernel_layout);
+  Layout out_layout(param.out_layout);
+  if (!out_layout.defined()) out_layout = in_layout;
+
+  if (param.use_bias) {
+    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, weight, bias]";
+  } else {
+    CHECK_EQ(in_shape->size(), 2U) << "Input:[data, weight]";
+  }
+  CHECK_EQ(out_shape->size(), 1U);
+
+  TShape dshape = in_shape->at(0);
+  if (dshape.ndim() == 0) return false;
+
+  CHECK_EQ(dshape.ndim(), 4U) << "Input data should be 4D";
+  CHECK_EQ(param.kernel_size.ndim(), 2U);
+  CHECK_EQ(param.strides.ndim(), 2U)
+      << "incorrect stride size: " << param.strides;
+
+  TShape wshape({param.kernel_size[0],
+                 param.kernel_size[1],
+                 dshape[3],
+                 param.channels});
+
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape);
+  if (param.use_bias) {
+    static const Layout default_bias_layout("C");
+    TShape bias_shape({param.channels});
+    auto oc_block = out_layout.subsizeof('C');
+    if (oc_block > 0) {
+      size_t split_axis = (out_layout.indexof('C') < out_layout.indexof('c')) ? 1 : 0;
+      bias_shape = ConvertLayout(bias_shape, default_bias_layout,
+                                 default_bias_layout.split('C', split_axis, oc_block));
+    }
+    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kBias, bias_shape);
+  }
+
+  // Assumes NHWC
+  TShape oshape({dshape[0], 0, 0, param.channels});
+  if (dshape[1] != 0) {
+    oshape[1] = (dshape[1] - param.kernel_size[0] + param.padding[0] + param.padding[2]) / param.strides[0] + 1;
+  }
+  if (dshape[2] != 0) {
+    oshape[2] = (dshape[2] - param.kernel_size[1] + param.padding[1] + param.padding[3]) / param.strides[1] + 1;
+  }
+  NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
+  // Perform incomplete shape inference. Fill in the missing values in data shape.
+  // 1) We can always fill in the batch_size.
+  // 2) We can back-calculate the input height/width if the corresponding stride is 1.
+  // dshape[0] = oshape[0];
+  // if (oshape[2] && param.strides[0] == 1) {
+  //   dshape[2] = oshape[2] - 2 * param.padding[0];
+  // }
+  // if (oshape[3] && param.strides[1] == 1) {
+  //   dshape[3] = oshape[3] - 2 * param.padding[1];
+  // }
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kData, dshape);
   return true;
 }
 
@@ -581,16 +647,15 @@ a bias vector is created and added to the outputs.
 .add_argument("data", "4D Tensor", "Input data.")
 .add_argument("weight", "4D Tensor", "Weight matrix.")
 .add_argument("bias", "1D Tensor", "Bias parameter.")
-// .add_argumnet("bits_weight", "int", "Precision of the weights")
-.add_arguments(Conv2DParam::__FIELDS__())
-.set_attr_parser(ParamParser<Conv2DParam>)
-.set_attr<FGetAttrDict>("FGetAttrDict", ParamGetAttrDict<Conv2DParam>)
-.set_attr<FListInputNames>("FListInputNames", UseBiasListInputNames<Conv2DParam>)
-.set_attr<FInferShape>("FInferShape", Conv2DInferShape)
-.set_attr<FInferType>("FInferType", Conv2DInferType<Conv2DParam>)
-.set_attr<FCorrectLayout>("FCorrectLayout", Conv2DCorrectLayout<Conv2DParam>)
+.add_arguments(BitserialConv2DParam::__FIELDS__())
+.set_attr_parser(ParamParser<BitserialConv2DParam>)
+.set_attr<FGetAttrDict>("FGetAttrDict", ParamGetAttrDict<BitserialConv2DParam>)
+.set_attr<FListInputNames>("FListInputNames", UseBiasListInputNames<BitserialConv2DParam>)
+.set_attr<FInferShape>("FInferShape", BitserialConv2DInferShape)
+.set_attr<FInferType>("FInferType", Conv2DInferType<BitserialConv2DParam>)
+.set_attr<FCorrectLayout>("FCorrectLayout", Conv2DCorrectLayout<BitserialConv2DParam>)
 .set_num_outputs(1)
-.set_num_inputs(UseBiasNumInputs<Conv2DParam>)
+.set_num_inputs(UseBiasNumInputs<BitserialConv2DParam>)
 .set_support_level(2); // TODO: not certain about this support level
 
 

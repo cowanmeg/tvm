@@ -287,7 +287,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
     N, H, W, CI, IB = get_const_tuple(data_q.shape)
     KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
-    HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    print ("Bitserial conv2d padding", padding)
+    # HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    TPAD, LPAD, DPAD, RPAD = padding
 
     if isinstance(stride, (tuple, list)):
         HSTR, WSTR = stride
@@ -295,10 +297,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
         HSTR, WSTR = stride, stride
     HCAT, WCAT = KH-1, KW-1
 
-    PAD_H = H + 2*HPAD
-    PAD_W = W + 2*WPAD
-    OH = (H + 2*HPAD - KH) // HSTR + 1
-    OW = (W + 2*WPAD - KW) // WSTR + 1
+    PAD_H = H + (TPAD + DPAD)
+    PAD_W = W + (LPAD + RPAD)
+    OH = (PAD_H - KH) // HSTR + 1
+    OW = (PAD_W - KW) // WSTR + 1
     oshape = (1, OH, OW, CO)
 
     # ==================== define configuration space ====================
@@ -331,9 +333,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     kvshape = (CO, KH, KW, CI, VC, KB)
     ovshape = (1, OH, OW, CO, VH, VW, VC)
     oshape = (1, OH, OW, CO)
+    print ("COMPUTE OSHPAE", oshape)
 
-    if (HPAD != 0 and WPAD != 0):
-        data_pad = pad(data_q, (0, HPAD, WPAD, 0, 0), name="data_pad")
+    if (DPAD != 0 and RPAD != 0):
+        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
     else:
         data_pad = data_q
 
@@ -353,10 +356,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
         b1b2 = (b1+b2).astype(out_dtype)
         if dorefa:
             return tvm.sum(
-                (tvm.popcount(data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci, b1].astype(out_dtype) &
-                              kernel_vec[co, dh, dw, ci, vc, b2].astype(out_dtype)) -
-                 tvm.popcount(data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci, b1].astype(out_dtype) &
-                              ~kernel_vec[co, dh, dw, ci, vc, b2]).astype(out_dtype)) << b1b2,
+                ((tvm.popcount(data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci, b1]&
+                              kernel_vec[co, dh, dw, ci, vc, b2]).astype(out_dtype) -
+                 tvm.popcount(data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci, b1]&
+                              ~kernel_vec[co, dh, dw, ci, vc, b2]).astype(out_dtype)) << b1b2),
                 axis=[dh, dw, ci, b1, b2])
 
         return tvm.sum(tvm.popcount(

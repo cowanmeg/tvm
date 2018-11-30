@@ -76,12 +76,13 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
 def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel, stride, padding,
                         activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa):
     in_height = in_width = in_size
-    with autotvm.apply_history_best(log_file):
+    with autotvm.apply_history_best(log_file) as hb:
         with tvm.target.create('llvm'):
+            # Read the log file and extract out kernel output tile size and pack dtype to prepack kernel
+
             A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=in_dtype, name='A')
             W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=in_dtype, name='W')
             B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, padding, activation_bits, weight_bits, pack_dtype, out_dtype, dorefa)
-            # s = tvm.create_schedule(B.op)
             s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
     a_shape = get_const_tuple(A.shape)

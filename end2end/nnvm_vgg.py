@@ -40,7 +40,7 @@ with sess.as_default():
     saver.restore(sess, '/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-60000')
 # model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
 
-RASP = False
+RASP = True
 opt_level = 0
 
 abits=2
@@ -203,8 +203,6 @@ def load_network():
                 padding = convert_same_padding(layer.input_shape, layer.output_shape, layer.kernel_size, layer.strides)
             else:
                 padding = (0, 0)
-
-            # First layer - floating point conversion using DoReFa quantization
             conv = sym.conv2d(data=network, channels=channels, kernel_size=kernel_size, strides=strides, padding=padding, 
                         layout=layout, kernel_layout=kernel_layout, use_bias=True, name=layer.name)
             network = sym.relu(data=conv)
@@ -271,7 +269,7 @@ data_np, data = load_test_image()
 print (get_numpy(sess, model(tf.convert_to_tensor(data_np))))
 
 if RASP:
-    target = tvm.target.rasp()
+    target = tvm.target.arm_cpu("rasp3b")
 else:
     target = 'llvm'
 

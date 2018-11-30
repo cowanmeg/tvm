@@ -43,15 +43,18 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
     Y, DB, K = get_const_tuple(data_packed.shape)
     X, WB, _ = get_const_tuple(weight_packed.shape)
-
+    print (data_packed.shape)
+    print (weight_packed.shape)
     ######## Search space
     x, y = cfg.axis(X), cfg.axis(Y)
     db, wb, k = cfg.reduce_axis(DB), cfg.reduce_axis(WB), cfg.reduce_axis(K)
     ko, ki = cfg.define_split('tile_k', k, policy='all', num_outputs=2, 
                                 filter=lambda xx: xx.size[-1] == 8 or xx.size[-1] == 16)
     yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2)
-    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
-                                filter=lambda xx: xx.size[-1] % 8 == 0)
+    # Temp get rid of this - for cifar X = 10
+    # xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
+    #                             filter=lambda xx: xx.size[-1] % 8 == 0)
+    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, xi, ki], 
                         policy='candidate', candidate=[
@@ -123,7 +126,7 @@ def schedule_bitserial_dense(cfg, outs):
 
     def _schedule(cfg, s, data, weight, data_vec, weight_vec, output, dorefa):
         s[data_vec].parallel(s[data_vec].op.axis[0])
-        s[data_vec].vectorize(s[data_vec].op.axis[-1])
+        # s[data_vec].vectorize(s[data_vec].op.axis[-1])
         s[weight_vec].parallel(s[weight_vec].op.axis[0])
         # s[weight_vec].vectorize(s[weight_vec].op.axis[-1])
 
@@ -142,8 +145,8 @@ def schedule_bitserial_dense(cfg, outs):
         nfactor = cfg['tile_x'].size[1]
         kfactor = cfg['tile_k'].size[1]
 
-        pc = _intrin_popcount(nfactor, kfactor, WB, DB, dorefa)
-        s[output].tensorize(wb, pc)   
+        # pc = _intrin_popcount(nfactor, kfactor, WB, DB, dorefa)
+        # s[output].tensorize(wb, pc)   
 
         s[output].parallel(yo)
         s = s.normalize()

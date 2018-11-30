@@ -108,6 +108,9 @@ def compute_conv2d(attrs, inputs, _):
         out = topi.nn.conv2d_NCHWc_int8_prepacked(inputs[0], kernel, strides, padding,
                                                   layout, out_dtype=out_dtype)
         # pylint: enable=assignment-from-no-return
+    elif layout == "NHWC":
+        # Temporary band-aid to get rasp working
+        out = topi.nn.conv2d_nhwc(inputs[0], kernel, strides, padding, out_dtype)
     elif groups == 1:
         out = topi.nn.conv2d(
             inputs[0], kernel, strides, padding, layout, out_dtype=out_dtype)

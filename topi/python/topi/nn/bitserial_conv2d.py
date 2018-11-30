@@ -182,7 +182,15 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
-    kernel_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
+    # Check if kernel is already prepacked
+    if len(kernel.shape) == 4:
+        kernel_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
+        KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
+    else:
+        kernel_vec = kernel
+        OCO, _, KH, KW, KB, VC = get_const_tuple(kernel_vec.shape)
+        CO = OCO * VC
+
     IB, N, CI, H, W = get_const_tuple(data_q.shape)
     KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
@@ -247,8 +255,9 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     data_vec = tvm.compute(dvshape, lambda n, h, w, ci, vh, vw, b: \
         data_pad[b][n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw], name='data_vec')
 
-    kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
-        kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')
+    if len(kernel.shape) == 4:
+        kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
+            kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')
 
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')
@@ -278,17 +287,30 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
                        conv[n][co//VC][h//VH][w//VW][h%VH][w%VW][co%VC],
                        name='conv_vec', tag='spatial_bitserial_conv_nchw')
 
+def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, pack_dtype):
+    kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
+    KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
+    kvshape = (CO, KH, KW, CI, VC, KB)
+    return tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
+            kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
+
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
                       pack_dtype, out_dtype, dorefa):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     data_q = bitpack(data, in_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
-    kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
+    pack_kernel = len(kernel.shape) == 4
+
+    if pack_kernel:
+        kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
+        KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
+    else:
+        kernel_vec = kernel
+        OCO, KH, KW, _, VC, KB = get_const_tuple(kernel_q.shape)
+        CO = OCO * VC
+
     N, H, W, CI, IB = get_const_tuple(data_q.shape)
-    KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
-    print ("Bitserial conv2d padding", padding)
-    # HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
     TPAD, LPAD, DPAD, RPAD = padding
 
     if isinstance(stride, (tuple, list)):
@@ -333,7 +355,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     kvshape = (CO, KH, KW, CI, VC, KB)
     ovshape = (1, OH, OW, CO, VH, VW, VC)
     oshape = (1, OH, OW, CO)
-    print ("COMPUTE OSHPAE", oshape)
 
     if (DPAD != 0 and RPAD != 0):
         data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
@@ -343,8 +364,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, ci, b: \
         data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][ci][b], name='data_vec')
 
-    kernel_vec = tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
-        kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
+    if pack_kernel:
+        kernel_vec = tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
+            kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
 
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')

@@ -110,7 +110,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     # OCO, KH, KW, KB, VC, _ = kernel_vec.shape
     CI_packed = CI // 8
 
-    HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    # HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    TPAD, LPAD, DPAD, RPAD = padding
 
     if isinstance(stride, (tuple, list)):
         HSTR, WSTR = stride
@@ -118,10 +119,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
         HSTR, WSTR = stride, stride
     HCAT, WCAT = KH-1, KW-1
 
-    PAD_H = H + 2*HPAD
-    PAD_W = W + 2*WPAD
-    OH = (H + 2*HPAD - KH) // HSTR + 1
-    OW = (W + 2*WPAD - KW) // WSTR + 1
+    PAD_H = H + (TPAD + DPAD)
+    PAD_W = W + (LPAD + RPAD)
+    OH = (PAD_H - KH) // HSTR + 1
+    OW = (PAD_W - KW) // WSTR + 1
     oshape = (1, OH, OW, CO)
 
     # ==================== define configuration space ====================
@@ -163,8 +164,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     dvshape = (N, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
 
-    if (HPAD != 0 and WPAD != 0):
-        data_pad = pad(data_q, (0, HPAD, WPAD, 0, 0), name="data_pad")
+    if (TPAD != 0 and RPAD != 0):
+        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
     else:
         data_pad = data_q
 
@@ -312,27 +313,27 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     KB = get_const_int(KB)
     IB = get_const_int(IB)
 
-    if data_pad is None:
-        padding = (0, 0)
-        _, in_h, in_w, _, _ = data_q.shape
-        kern_h, kern_w, _, _ = kernel.shape
-        _, out_h, out_w, _ = output.shape
-        hstride = (in_h - kern_h) // (out_h - 1)
-        wstride = (in_w - kern_w) // (out_w - 1)
-        stride = get_const_int(hstride), get_const_int(wstride)
-    else:
-        _, in_h, in_w, _, _ = data_q.shape
-        _, pad_h, pad_w, _, _ = data_pad.shape
-        hpad = (pad_h - in_h) // 2
-        wpad = (pad_w - in_w) // 2
-        padding = get_const_int(hpad), get_const_int(wpad)
+    # if data_pad is None:
+    #     padding = (0, 0)
+    #     _, in_h, in_w, _, _ = data_q.shape
+    #     kern_h, kern_w, _, _ = kernel.shape
+    #     _, out_h, out_w, _ = output.shape
+    #     hstride = (in_h - kern_h) // (out_h - 1)
+    #     wstride = (in_w - kern_w) // (out_w - 1)
+    #     stride = get_const_int(hstride), get_const_int(wstride)
+    # else:
+    #     _, in_h, in_w, _, _ = data_q.shape
+    #     _, pad_h, pad_w, _, _ = data_pad.shape
+    #     hpad = (pad_h - in_h) // 2
+    #     wpad = (pad_w - in_w) // 2
+    #     padding = get_const_int(hpad), get_const_int(wpad)
 
-        _, in_h, in_w, _, _ = data_pad.shape
-        kern_h, kern_w, _, _ = kernel.shape
-        _, out_h, out_w, _ = output.shape
-        hstride = (in_h - kern_h) // (out_h - 1)
-        wstride = (in_w - kern_w) // (out_w - 1)
-        stride = get_const_int(hstride), get_const_int(wstride)
+    #     _, in_h, in_w, _, _ = data_pad.shape
+    #     kern_h, kern_w, _, _ = kernel.shape
+    #     _, out_h, out_w, _ = output.shape
+    #     hstride = (in_h - kern_h) // (out_h - 1)
+    #     wstride = (in_w - kern_w) // (out_w - 1)
+    #     stride = get_const_int(hstride), get_const_int(wstride)
 
     # wkl = _get_workload(data, kernel, stride, padding, output.dtype, "NHWC")
     # sch = _get_schedule(wkl, "NHWC")

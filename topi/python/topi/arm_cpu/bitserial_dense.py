@@ -12,7 +12,7 @@ from ..nn.bitserial_dense import bitserial_dense
 from ..nn.bitserial_conv2d import bitpack # Pull out into a utility function?
 
 
-@autotvm.task.register("topi_arm_cpu_bitserial_dense")
+@autotvm.task.register("topi_nn_bitserial_dense")
 def _topi_bitserial_dense(*args, **kwargs):
     args = deserialize_args(args)
     C = topi.nn.bitserial_dense(*args, **kwargs)
@@ -40,21 +40,25 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
         2-D with shape [batch, out_dim]
     """
     data_packed = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
-    weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    if len(weight.shape) == 2:
+        weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    else: 
+        weight_packed = weight
     Y, DB, K = get_const_tuple(data_packed.shape)
     X, WB, _ = get_const_tuple(weight_packed.shape)
-    print (data_packed.shape)
-    print (weight_packed.shape)
+
     ######## Search space
     x, y = cfg.axis(X), cfg.axis(Y)
     db, wb, k = cfg.reduce_axis(DB), cfg.reduce_axis(WB), cfg.reduce_axis(K)
     ko, ki = cfg.define_split('tile_k', k, policy='all', num_outputs=2, 
                                 filter=lambda xx: xx.size[-1] == 8 or xx.size[-1] == 16)
     yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2)
-    # Temp get rid of this - for cifar X = 10
-    # xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
-    #                             filter=lambda xx: xx.size[-1] % 8 == 0)
-    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
+    
+    if (X % 8 == 0): # Can use the arm microkernel
+        xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
+                                    filter=lambda xx: xx.size[-1] % 8 == 0)
+    else:
+        xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, xi, ki], 
                         policy='candidate', candidate=[
@@ -145,8 +149,9 @@ def schedule_bitserial_dense(cfg, outs):
         nfactor = cfg['tile_x'].size[1]
         kfactor = cfg['tile_k'].size[1]
 
-        # pc = _intrin_popcount(nfactor, kfactor, WB, DB, dorefa)
-        # s[output].tensorize(wb, pc)   
+        if nfactor % 8 == 0:
+            pc = _intrin_popcount(nfactor, kfactor, WB, DB, dorefa)
+            s[output].tensorize(wb, pc)   
 
         s[output].parallel(yo)
         s = s.normalize()
@@ -166,10 +171,10 @@ def schedule_bitserial_dense(cfg, outs):
             output = op.output(0)
             weight_vec = op.input_tensors[0]
             weight_packed = weight_vec.op.input_tensors[0]
-            weight = weight_packed.op.input_tensors[0]
-            if "QuantizeInput" in weight.op.name:
-                # Need to go up 1 further, from the combine in bitpack
-                weight = weight.op.input_tensors[0]
+            # weight = weight_packed.op.input_tensors[0]
+            # if "QuantizeInput" in weight.op.name:
+            #     # Need to go up 1 further, from the combine in bitpack
+            #     weight = weight.op.input_tensors[0]
 
             data_vec = op.input_tensors[1]
             # data_packed = data_vec.op.input_tensors[0]
@@ -177,7 +182,7 @@ def schedule_bitserial_dense(cfg, outs):
             if "QuantizeInput" in data.op.name:
                 data = data.op.input_tensors[0]
             dorefa = (output.op.tag == 'bitserial_dense_dorefa')
-            _schedule(cfg, s, data, weight, data_vec, weight_vec, output, dorefa)
+            _schedule(cfg, s, data, weight_packed, data_vec, weight_vec, output, dorefa)
         else:
             raise RuntimeError("Unsupported operator: %s" % OP.tag)
 

@@ -155,12 +155,19 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
   CHECK_EQ(param.strides.ndim(), 2U)
       << "incorrect stride size: " << param.strides;
 
+  // Weight shape if there was no packing, if there was packing this does not equal weight shape
   TShape wshape({param.kernel_size[0],
                  param.kernel_size[1],
                  dshape[3],
                  param.channels});
 
-  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape);
+   TShape wshape_packed({param.kernel_size[0],
+                 param.kernel_size[1],
+                 param.weight_bits,
+                 dshape[3] / 8,
+                 param.channels});
+
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape_packed);
   if (param.use_bias) {
     static const Layout default_bias_layout("C");
     TShape bias_shape({param.channels});
@@ -309,7 +316,7 @@ inline bool Conv2DInferType(const nnvm::NodeAttrs& attrs,
   if (param.out_dtype != -1) {
     CHECK(!type_is_none((*in_type)[0]));
     for (size_t i = 1; i < in_type->size(); ++i) {
-      NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, (*in_type)[0]);
+      NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, (*in_type)[i]);
     }
     NNVM_ASSIGN_OUTPUT_TYPE(attrs, *out_type, 0, param.out_dtype);
   } else {

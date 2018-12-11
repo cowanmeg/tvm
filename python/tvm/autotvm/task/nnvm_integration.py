@@ -61,6 +61,8 @@ class TaskExtractEnv:
             nnvm.sym.conv2d: [topi.nn.conv2d, topi.nn.depthwise_conv2d_nchw],
             nnvm.sym.conv2d_transpose: [topi.nn.conv2d_transpose_nchw],
             nnvm.sym.dense: [topi.nn.dense],
+            nnvm.sym.bitserial_conv2d: [topi.nn.bitserial_conv2d_nhwc],
+            nnvm.sym.bitserial_dense: [topi.nn.bitserial_dense],
         }
 
         # topi compute -> autotvm task name
@@ -69,7 +71,9 @@ class TaskExtractEnv:
             topi.nn.depthwise_conv2d_nchw: "topi_nn_depthwise_conv2d_nchw",
             topi.nn.conv2d_transpose_nchw: "topi_nn_conv2d_transpose_nchw",
             topi.nn.dense: "topi_nn_dense",
-        }
+            topi.nn.bitserial_conv2d_nhwc: "topi_nn_bitserial_conv2d_nhwc",
+            topi.nn.bitserial_dense: "topi_nn_bitserial_dense",
+       }
 
         self.topi_to_schedule = {
             topi.nn.conv2d: [topi.generic.schedule_conv2d_nchw,
@@ -78,6 +82,8 @@ class TaskExtractEnv:
                                             topi.generic.schedule_depthwise_conv2d_nhwc],
             topi.nn.conv2d_transpose_nchw: [topi.generic.schedule_conv2d_transpose_nchw],
             topi.nn.dense: [topi.generic.schedule_dense],
+            topi.nn.bitserial_conv2d_nhwc: [topi.generic.schedule_bitserial_conv2d_nhwc],
+            topi.nn.bitserial_dense: [topi.generic.schedule_bitserial_dense],
         }
 
         self._register_tracing()

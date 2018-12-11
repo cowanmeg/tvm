@@ -35,15 +35,21 @@ struct DenseParam : public dmlc::Parameter<DenseParam> {
 struct BitserialDenseParam : public dmlc::Parameter<BitserialDenseParam> {
   int units;
   bool use_bias;
+  int pack_dtype;
   int out_dtype;
   int activation_bits;
   int weight_bits;
+  bool dorefa;
 
   DMLC_DECLARE_PARAMETER(BitserialDenseParam) {
     DMLC_DECLARE_FIELD(units).set_lower_bound(1)
     .describe("Number of hidden units of the dense transformation.");
     DMLC_DECLARE_FIELD(use_bias).set_default(false)
     .describe("Whether to use bias parameter");
+    DMLC_DECLARE_DTYPE_FIELD(pack_dtype)
+    .add_enum("same", -1)
+    .set_default(-1)
+    .describe("Pack datatype");
     DMLC_DECLARE_DTYPE_FIELD(out_dtype)
     .add_enum("same", -1)
     .set_default(-1)
@@ -52,6 +58,8 @@ struct BitserialDenseParam : public dmlc::Parameter<BitserialDenseParam> {
     .describe("Bitserial: Number of bits for the kernel.");
     DMLC_DECLARE_FIELD(activation_bits).set_default(2)
     .describe("Bitserial: Number of bits for acitvations/data.");
+     DMLC_DECLARE_FIELD(dorefa).set_default(true)
+    .describe("Style of preforming binary popcount");
   }
   // constants
   static const constexpr int kData = 0;
@@ -208,9 +216,11 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
   std::string kernel_layout;
   std::string out_layout;
   int out_dtype;
+  int pack_dtype;
   int activation_bits;
   int weight_bits;
   bool use_bias;
+  bool dorefa;
 
   DMLC_DECLARE_PARAMETER(BitserialConv2DParam) {
     DMLC_DECLARE_FIELD(channels)
@@ -236,6 +246,10 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
       .describe("Dimension ordering of weight. Can be 'OIHW', 'OIHW16o16i', etc."
                 "'O', 'I', 'H', 'W' stands for num_filter, input_channel, height, and width"
                 "dimensions respectively.");
+    DMLC_DECLARE_DTYPE_FIELD(pack_dtype)
+    .add_enum("same", -1)
+    .set_default(-1)
+    .describe("Pack datatype");
     DMLC_DECLARE_DTYPE_FIELD(out_dtype)
       .add_enum("same", -1)
       .set_default(-1)
@@ -246,6 +260,8 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
       .describe("Bitserial: Number of bits for acitvations/data.");
     DMLC_DECLARE_FIELD(use_bias).set_default(false)
       .describe("Whether the layer uses a bias vector.");
+    DMLC_DECLARE_FIELD(dorefa).set_default(true)
+      .describe("Style of performing popcount");
   }
   // constants
   static const constexpr int kData = 0;

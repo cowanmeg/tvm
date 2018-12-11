@@ -145,7 +145,7 @@ inline bool BitserialDenseInferShape(const nnvm::NodeAttrs& attrs,
     NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
   }
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kWeight,
-                          TShape({param.units, num_inputs}));
+                          TShape({param.units, param.weight_bits, num_inputs/8}));
   if (param.use_bias) {
     NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kBias, TShape({param.units}));
   }
@@ -165,7 +165,7 @@ inline bool BitserialDenseInferType(const nnvm::NodeAttrs& attrs,
   if (param.out_dtype != -1) {
     CHECK(!type_is_none((*in_type)[0]));
     for (size_t i = 1; i < in_type->size(); ++i) {
-      NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, (*in_type)[0]);
+      NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, (*in_type)[1]);
     }
     NNVM_ASSIGN_OUTPUT_TYPE(attrs, *out_type, 0, param.out_dtype);
   } else {

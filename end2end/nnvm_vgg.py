@@ -11,6 +11,8 @@ from nnvm.compiler import graph_util
 from tvm.contrib import graph_runtime as runtime
 from PIL import Image
 from tvm.contrib import util, rpc
+from topi.nn.bitserial_conv2d import bitpack
+from topi.util import get_const_tuple
 
 import tensorflow as tf
 from riptide.binary.binary_funcs import *
@@ -22,48 +24,54 @@ from riptide.models.vgg11 import vgg11
 # Load tf model and weights
 actQ = DQuantize
 weightQ = XQuantize
-bits = 2.0#load_clusters(2)
+bits = 2.0
 use_act = False
 use_bn = False
 use_maxpool = False
-pure_shiftnorm = True
-config = Config(actQ=actQ, weightQ=weightQ, bits=bits, use_act=use_act, use_bn=use_bn, use_maxpool=use_maxpool, pure_shiftnorm=pure_shiftnorm)
+pure_shiftnorm = False
+config = Config(actQ=actQ, weightQ=weightQ, bits=bits, use_act=use_act, use_bn=use_bn, 
+                use_maxpool=use_maxpool, pure_shiftnorm=pure_shiftnorm)
 
 with config:
-    model = vgg11(classes=10)
+    model = vgg11(classes=1000)
 
-test_data = tf.keras.layers.Input(shape=[32, 32, 3], batch_size = 1)
+test_data = tf.keras.layers.Input(shape=[224, 224, 3], batch_size = 1)
 out_tensor = model(test_data, training=False)
 sess = tf.Session()
 with sess.as_default():
     saver = tf.train.Saver()
-    saver.restore(sess, '/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-60000')
+    saver.restore(sess, '/shared/jwfromm/models/vgg11_binary_a2_w1_shiftnorm_scalu/model.ckpt-141946') # imagenet
+    input_shape = (1, 224, 224, 3)
+    output_shape = (1, 1000)
+
+    # saver.restore(sess, '/shared/jwfromm/vgg_dorefa_shiftnorm_scalu/model.ckpt-60000') # cifar10
+    # input_shape = (1, 32, 32, 3)
+    # output_shape = (1, 10)
 # model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
 
 RASP = True
-opt_level = 0
+REPEATS = 20
+opt_level = 3
 
-abits=2
-wbits=1
+abits = 2
+wbits = 1
 layout = 'NHWC'
 kernel_layout = 'HWIO'
-data_shape = (1, 32, 32, 3)
-out_shape = (1, 10)
+kernel_bit_axis = 2
+kernel_pack_axis = 2
+kernel_pack_dtype = 'uint8'
+output_dtype = 'float32'
 
 def convert_same_padding(input_shape, output_shape, kernel, strides):
     def _get_pad_pair(i, o, k, s):
         pad = max((o - 1) * s + k - i, 0)
-        # if i % s == 0:
-        #     pad = max(k - s, 0)
-        # else:
-        #     pad = max(k - (i % s), 0)
+
         pad_before = pad // 2
         pad_after = pad - pad_before
         return [pad_before, pad_after]
 
     pad_v = _get_pad_pair(input_shape[1], output_shape[1], kernel[0], strides[0])
     pad_h = _get_pad_pair(input_shape[2], output_shape[2], kernel[1], strides[1])
-
     return [pad_v[0], pad_h[0], pad_v[1], pad_h[1]]
 
 # Loading in numpy parameters
@@ -72,10 +80,10 @@ def load_parameter():
     dtypes = {}
 
     # Load in trained parameters
-    prev_layer_name = None
-    for layer in model.layers:        
+    prev_layer = None
+    for layer in model.layers:   
         if 'binary_conv2d' in layer.name:
-            w = get_numpy(sess, get_quantize_bits(layer.weights[0]))[0]
+            w = get_numpy(sess, get_quantize_bits(layer.weights[0]))
             shift = w[0]
             weights = w[1]
             # Convert shift so that it's int representing amount to right shift by
@@ -83,24 +91,25 @@ def load_parameter():
             key = layer.name + 'shift_shift'
             params[key] = shift
             dtypes[key] = 'int16'
-            # For clip thresholds
-            zeros = np.zeros(shape=shift.shape).astype('int16')
-            bit_constant = int((2.0**abits) - 1)
-            threshold = np.left_shift(bit_constant, shift).astype('int16')
-            key = layer.name + 'clip_a_min'
-            params[key] = zeros
-            dtypes[key] = 'int16'
-            key = layer.name + 'clip_a_max'
-            params[key] = threshold
-            dtypes[key] = 'int16'
+            
             # Map -1 weights to 0
             bp_weights = weights.astype('int16')
             weights = np.copy(bp_weights)
             for x in np.nditer(weights, op_flags=['readwrite']):
                 x[...] = 1 if x == 1 else 0
+            # Bitpack weights
+            ctx = tvm.cpu(0)
+            A = tvm.placeholder(weights.shape, dtype='int16')
+            B = bitpack(A, wbits, kernel_pack_axis, kernel_bit_axis, kernel_pack_dtype)
+            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+            s = tvm.create_schedule(B.op)
+            func = tvm.build(s, [A, B], "llvm")
+            weights_tvm = tvm.nd.array(weights, ctx)
+            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+            func(weights_tvm, weights_bitpacked)
             key = layer.name + '_weight'
-            params[key] = weights
-            dtypes[key] = 'int16'
+            params[key] = weights_bitpacked.asnumpy()
+            dtypes[key] = kernel_pack_dtype
         elif 'conv2d' in layer.name:
             params[layer.name + '_weight'] = get_numpy(sess, layer.weights)[0]
             dtypes[layer.name + '_weight'] = 'float32'
@@ -108,14 +117,33 @@ def load_parameter():
             dtypes[layer.name + '_bias'] = 'float32'
         elif 'shift_normalization' in layer.name:
             # Fuse this shift with the previous binary layer's shift
-            x = get_shiftnorm_ap2(sess, layer)
-            shift = np.log2(x).flatten().astype('int16')
-            params[prev_layer_name + 'shift_shift'] += shift
+            _shift, mean = get_numpy(sess, get_shiftnorm_ap2(layer, conv_weights = prev_layer.weights[0].value()))
+            shift = np.log2(_shift).flatten().astype('int16')
+            mean = mean.astype('int16') * _shift.flatten().astype('int16')
+            
+            # print ("Before adding shift norm", params[prev_layer.name + 'shift_shift'])
+            conv_shift = params[prev_layer.name + 'shift_shift']
+            total_shift = conv_shift - shift
+            params[prev_layer.name + 'shift_shift'] = total_shift
+            # print ("After adding shift norm", params[prev_layer.name + 'shift_shift'])
+            
+            r = (1 << (params[prev_layer.name + 'shift_shift'] - 1))
+            params[prev_layer.name + 'round'] = r - mean
+            dtypes[prev_layer.name + 'round'] = 'int16'
 
-            params[prev_layer_name + 'round'] = 1 << (params[prev_layer_name + 'shift_shift'] - 1)
-            dtypes[prev_layer_name + 'round'] = 'int16'
+            # For clip thresholds
+            zeros = np.zeros(shape=shift.shape).astype('int16')
+            bit_constant = int((2.0**abits) - 1)
+            threshold = np.left_shift(bit_constant, total_shift).astype('int16')
+            key = prev_layer.name + 'clip_a_min'
+            params[key] = zeros
+            dtypes[key] = 'int16'
+            key = prev_layer.name + 'clip_a_max'
+            params[key] = threshold
+            dtypes[key] = 'int16'
+
         elif 'binary_dense' in layer.name:
-            w = get_numpy(sess, get_quantize_bits(layer.weights[0]))[0]
+            w = get_numpy(sess, get_quantize_bits(layer.weights[0]))
             shift = w[0]
             weights = w[1]
             # Convert shift so that it's int representing amount to right shift by
@@ -139,16 +167,22 @@ def load_parameter():
             weights = np.copy(bp_weights)
             for x in np.nditer(weights, op_flags=['readwrite']):
                 x[...] = 1 if x == 1 else 0
+             # Bitpack weights
+            ctx = tvm.cpu(0)
+            A = tvm.placeholder(weights.shape, dtype='int16')
+            B = bitpack(A, wbits, 1, 1, kernel_pack_dtype)
+            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+            s = tvm.create_schedule(B.op)
+            func = tvm.build(s, [A, B], "llvm")
+            weights_tvm = tvm.nd.array(weights, ctx)
+            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+            func(weights_tvm, weights_bitpacked)
             key = layer.name + '_weight'
-            params[key] = weights
-            dtypes[key] = 'int16'
+            params[key] = weights_bitpacked.asnumpy()
+            dtypes[key] = kernel_pack_dtype
 
         elif 'batch_normalization' in layer.name:
             gamma, beta, moving_mean, moving_var = get_numpy(sess, layer.weights)
-            # gamma = sym.Variable(layer.name + '_gamma', shape=g.shape)
-            # beta = sym.Variable(layer.name + '_beta', shape=b.shape)
-            # moving_mean = sym.Variable(layer.name + '_moving_mean', shape=m_m.shape)
-            # moving_var = sym.Variable(layer.name + '_moving_var', shape=m_v.shape)
             _scale = (1 / np.sqrt(moving_var + layer.epsilon) * gamma).astype('float32')
             _shift = (-1*moving_mean * _scale + beta).astype('float32')
 
@@ -157,26 +191,26 @@ def load_parameter():
             dtypes[layer.name +  '_scale'] = 'float32'
             dtypes[layer.name +  '_shift'] = 'float32'
         
-        prev_layer_name = layer.name
+        elif 'scalu' in layer.name:
+            params[layer.name] = get_numpy(sess, layer.weights)
+            dtypes[layer.name] = 'float32'
+
+        prev_layer = layer
     # for key in params:
     #         print (key, params[key].shape, dtypes[key])
 
     return params, dtypes
 
-def load_network():
+def load_layers():
     def remove_prefix(text, prefix):
         if text.startswith(prefix):
             return text[len(prefix):]
         return text 
 
     network = sym.Variable(name="data")
-    params = {}
-    dtypes = {}
-    input_shape = (32, 32)
 
     # Load in trained parameters
     for layer in model.layers:
-        # print (layer.name, 'input:', layer.input_shape, 'output:', layer.output_shape)
         if "binary_conv2d" in layer.name:
             if (layer.padding in 'same'):
                 padding = convert_same_padding(layer.input_shape, layer.output_shape, layer.kernel_size, layer.strides)
@@ -186,15 +220,23 @@ def load_network():
             network = sym.bitserial_conv2d(data=network, kernel_size=layer.kernel_size, channels=layer.filters,
                             padding=padding, strides=layer.strides,
                             layout=layout, kernel_layout=kernel_layout, use_bias=False, 
-                            activation_bits=abits, weight_bits=wbits,
+                            activation_bits=abits, weight_bits=wbits, pack_dtype='uint8',
                             out_dtype='int16', name=layer.name)
             # Scaling back down to quantized data
             # Step 1 -> Add to imitate round nearest instead of floor
+            
             r = sym.Variable(layer.name + 'round', shape=layer.output_shape)
             network = network + r
+            # if "binary_conv2d_1" in layer.name:
+            #     print (layer.kernel_size, layer.filters, layer.strides)
+            #     global output_shape
+            #     output_shape = layer.input_shape
+            #     global output_dtype
+            #     output_dtype = 'int16'
+            #     break
             network = sym.clip_channelwise(network, axis=3, name=layer.name+'clip')
             network = sym.right_shift_channelwise(network, axis=3, name=layer.name+'shift')
-
+            
         elif 'conv2d' in layer.name:
             channels = layer.filters
             kernel_size = layer.kernel_size
@@ -213,7 +255,7 @@ def load_network():
         elif 'binary_dense' in layer.name:
             network = sym.flatten(data=network)
             network = sym.bitserial_dense(data=network, units=layer.units, activation_bits=abits, weight_bits=wbits,
-                out_dtype='int16', name=layer.name)
+                pack_dtype='uint8', out_dtype='int16', name=layer.name)
 
         elif 'scale' in layer.name:
             network = network * layer.scale
@@ -221,17 +263,18 @@ def load_network():
             network = sym.clip(data=network, a_min = 0.0, a_max = 1.0)
             data = network * ((1 << abits) - 1) + 0.5
             network = sym.cast(data=data, dtype='int16')
-          
+
+        elif 'scalu' in layer.name:
+            scale = sym.Variable(layer.name, shape=layer.input_shape)
+            network = sym.cast(data=network, dtype='float32')
+            network = network * scale
+
         elif 'shift_normalization' in layer.name:
             # Merge shift normalization with the proceeding binary operation
             continue 
-
         elif 'max_pooling2d' in layer.name:
-            network = sym.max_pool2d(data=network, pool_size=layer.pool_size, strides=layer.strides, name=layer.name, layout=layout)
-            
-            
-
-            
+            network = sym.max_pool2d(data=network, pool_size=layer.pool_size, 
+                strides=layer.strides, name=layer.name, layout=layout)
         elif 'batch_normalization' in layer.name:
             # Currently NNVM doesn't support NHWC batch norm - computing it from the components
             gamma, beta, moving_mean, moving_var = get_numpy(sess, layer.weights)
@@ -241,65 +284,79 @@ def load_network():
         else:
             print ("\t Didn't handle", layer.name)
 
-
     return network
 
 def load_test_image():
-    data_np = np.ones(shape=(1, 32, 32, 3)).astype('float32')
+    data_np = np.ones(shape=(input_shape)).astype('float32')
     data_tvm = tvm.nd.array(data_np)
     return data_np, data_tvm
 
-def run(num_iter, ctx):
+def run(data, num_iter, ctx):
     module.set_input("data", data)
     module.run()
-    print (out_shape)
-    out =  module.get_output(0, tvm.nd.empty(out_shape, 'int16', ctx=ctx)).asnumpy()
+    out =  module.get_output(0, tvm.nd.empty(output_shape, output_dtype, ctx=ctx)).asnumpy()
 
     # check for no nans
     # print ("Any nan?", np.isnan(np.min(out)))
     # print (np.unique(out, return_counts=True))
-    print ("output", out)
+    # print ("NNVM output", out)
+    # print (np.argsort(out))
 
-    ftimer = module.module.time_evaluator("run", ctx, num_iter)
-    print (ftimer())
+    ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=num_iter)
+    prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
+    print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
+            (np.mean(prof_res), np.std(prof_res)))
 
-network = load_network()
-params, dtypes = load_parameter()
-data_np, data = load_test_image()
-print (get_numpy(sess, model(tf.convert_to_tensor(data_np))))
+def get_network():
+    network = load_layers()
+    params, dtypes = load_parameter()
+    return network, params, dtypes, input_shape, output_shape
 
-if RASP:
-    target = tvm.target.arm_cpu("rasp3b")
-else:
-    target = 'llvm'
+def build_network():
+    if RASP:
+        target = tvm.target.arm_cpu("rasp3b")
+    else:
+        target = 'llvm'
 
-with nnvm.compiler.build_config(opt_level=opt_level):
-    graph, lib, params = nnvm.compiler.build(network, target, 
-        dtype=dtypes, 
-        shape={"data":data.shape}, 
-        params=params)
-    # print (graph.ir())
+    network = load_layers()
+    params, dtypes = load_parameter()
 
-if RASP:
-    host = '10.77.1.69'
-    port = 9090
+    with nnvm.compiler.build_config(opt_level=opt_level):
+        graph, lib, params = nnvm.compiler.build(network, target, 
+            dtype=dtypes, 
+            shape={"data":input_shape}, 
+            params=params)
+        # print (graph.ir())
 
-    tmp = util.tempdir()
-    lib_fname = tmp.relpath('net.o')
-    lib.save(lib_fname)
+    return graph, lib, params
 
-    remote = rpc.connect(host, port)
-    remote.upload(lib_fname)
 
-    ctx = remote.cpu(0)
-    rlib = remote.load_module('net.o')
-    rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
-    module = runtime.create(graph, rlib, ctx)
-else:
-    ctx = tvm.cpu(0)
-    rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
-    module = runtime.create(graph, lib, ctx)
-module.set_input(**rparams)
-run(5, ctx)
+if __name__ == '__main__':
+    graph, lib, params = build_network()
+    data_np, data = load_test_image()
+    # print ("Tensorflow output:", get_numpy(sess, model(tf.ones(shape=input_shape), training=False)))
+
+    if RASP:
+        host = '10.77.1.69'
+        port = 9090
+
+        tmp = util.tempdir()
+        lib_fname = tmp.relpath('net.o')
+        lib.save(lib_fname)
+
+        remote = rpc.connect(host, port)
+        remote.upload(lib_fname)
+
+        ctx = remote.cpu(0)
+        rlib = remote.load_module('net.o')
+        rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
+        module = runtime.create(graph, rlib, ctx)
+    else:
+        ctx = tvm.cpu(0)
+        rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
+        module = runtime.create(graph, lib, ctx)
+        
+    module.set_input(**rparams)
+    run(data, REPEATS, ctx)
 
 

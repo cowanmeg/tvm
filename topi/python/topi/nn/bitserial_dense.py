@@ -9,7 +9,38 @@ from .bitserial_conv2d import bitpack # Pull out into a utility function?
 # @tvm.target.override_native_generic_func("bitserial_dense")
 @tvm.target.generic_func
 def bitserial_dense(data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa):
-    return bitserial_dense_generic(data, weight, data_bits, weight_bits, pack_dtype, out_dtype, dorefa)
+
+
+    data_packed = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    if len(weight.shape) == 4:
+        weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    else:
+        weight_packed = weight
+    Y, DB, K = get_const_tuple(data_packed.shape)
+    X, WB, _ = get_const_tuple(weight_packed.shape)
+
+    oshape  = (Y, X)
+    k = tvm.reduce_axis((0, K), name='k')
+    db = tvm.reduce_axis((0, DB), name='db')
+    wb = tvm.reduce_axis((0, WB), name='wb')
+
+    matmul_dorefa = tvm.compute(oshape, 
+        lambda i, j: tvm.sum( 
+                (tvm.popcount(weight_packed[j, wb, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)) - 
+                    tvm.popcount(~weight_packed[j, wb, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)))
+                    << (db+wb).astype(out_dtype), axis=[wb, db, k]), 
+        tag='bitserial_dense_dorefa')
+
+    matmul = tvm.compute(oshape, 
+                         lambda i, j: tvm.sum( 
+                                tvm.popcount(weight_packed[j, wb, k].astype(out_dtype) & data_packed[i, db, k].astype(out_dtype)
+                                 << (db+wb)).astype(out_dtype), axis=[wb, db, k]), 
+                          tag='bitserial_dense')
+                          
+    if dorefa:
+        return matmul_dorefa
+    return matmul
+
 
 
 @autotvm.register_topi_compute(bitserial_dense, ['cpu'], 'direct')

@@ -381,8 +381,8 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     strides = attrs.get_int_tuple("strides")
     channels = attrs.get_int("channels")
     layout = attrs["layout"]
-    pack_dtype = 'uint8' # TEMP hard coded
-    dorefa = True # TEMP fix these
+    pack_dtype = attrs['pack_dtype']
+    dorefa = attrs['dorefa']
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
@@ -419,9 +419,9 @@ def compute_btiserial_dense(attrs, inputs, _):
     """Compute definition of bitserial_dense"""
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
-    pack_dtype = 'uint8' # TEMP hard coded
+    pack_dtype = attrs['pack_dtype']
     out_dtype = attrs["out_dtype"]
-    dorefa = True # TEMP fix these
+    dorefa = attrs['dorefa']
     # if attrs.get_bool("use_bias"):
     #     return topi.nn.bitserial_dense(inputs[0], inputs[1], bias=inputs[2])
     return topi.nn.bitserial_dense(inputs[0], inputs[1], activation_bits,

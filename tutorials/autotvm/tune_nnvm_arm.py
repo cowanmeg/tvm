@@ -179,10 +179,10 @@ def get_network(name, batch_size):
 
 # Replace "aarch64-linux-gnu" with the correct target of your board.
 # This target is used for cross compilation. You can query it by :code:`gcc -v` on your device.
-target = tvm.target.create('llvm -device=arm_cpu -target=aarch64-linux-gnu')
+target = tvm.target.create('llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon')
 
 # Also replace this with the device key in your tracker
-device_key = 'rk3399'
+device_key = 'rpi3b'
 
 # Set this to True if you use android phone
 use_android = False
@@ -203,7 +203,7 @@ tuning_option = {
         builder=autotvm.LocalBuilder(
             build_func='ndk' if use_android else 'default'),
         runner=autotvm.RPCRunner(
-            device_key, host='localhost', port=9190,
+            device_key, host='fleet', port=9190,
             number=5,
             timeout=4,
         ),
@@ -342,7 +342,7 @@ def tune_and_evaluate(tuning_opt):
 # We do not run the tuning in our webpage server since it takes too long.
 # Uncomment the following line to run it by yourself.
 
-# tune_and_evaluate(tuning_option)
+tune_and_evaluate(tuning_option)
 
 ######################################################################
 # Sample Output

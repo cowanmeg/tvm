@@ -56,24 +56,24 @@ from tvm.autotvm.task.nnvm_integration import deserialize_args
 #         sch = _QUANTIZED_SCHEDULES_NHWC[idx]
 #     return sch
 
-@autotvm.task.register("topi_x86_bitserial_conv_nhwc")
-def topi_bitserial_conv2d_nhwc(*args, **kwargs):
-    args = deserialize_args(args)
-    C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
-    s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
-    data = args[0]
-    kernel = args[1]
-    return s, [data, kernel, C]
+# @autotvm.task.register("topi_x86_bitserial_conv_nhwc")
+# def topi_bitserial_conv2d_nhwc(*args, **kwargs):
+#     args = deserialize_args(args)
+#     C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
+#     s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
+#     data = args[0]
+#     kernel = args[1]
+#     return s, [data, kernel, C]
 
-@autotvm.task.register("topi_arm_cpu_bitserial_conv_nchw")
-@autotvm.task.register("topi_x86_bitserial_conv_nchw")
-def topi_bitserial_conv2d_nchw(*args, **kwargs):
-    args = deserialize_args(args)
-    C = topi.nn.bitserial_conv2d_nchw(*args, **kwargs)
-    s = generic.nn.schedule_bitserial_conv2d_nchw([C])
-    data = args[0]
-    kernel = args[1]
-    return s, [data, kernel, C]
+# @autotvm.task.register("topi_arm_cpu_bitserial_conv_nchw")
+# @autotvm.task.register("topi_x86_bitserial_conv_nchw")
+# def topi_bitserial_conv2d_nchw(*args, **kwargs):
+#     args = deserialize_args(args)
+#     C = topi.nn.bitserial_conv2d_nchw(*args, **kwargs)
+#     s = generic.nn.schedule_bitserial_conv2d_nchw([C])
+#     data = args[0]
+#     kernel = args[1]
+#     return s, [data, kernel, C]
 
 # @bitserial_conv2d_nhwc.register("cpu")
 # @bitserial_conv2d_nchw.register("cpu")

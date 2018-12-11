@@ -46,7 +46,7 @@ RaspSpatialPack = namedtuple('SpatialPack',
 #     SpatialPackNCHW(1, 1, 8, 1, 16),
 # ]
 
-@autotvm.task.register("topi_arm_cpu_bitserial_conv_nhwc")
+@autotvm.task.register("topi_nn_bitserial_conv2d_nhwc")
 def _topi_bitserial_conv2d(*args, **kwargs):
     args = deserialize_args(args)
     C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
@@ -68,7 +68,6 @@ def _get_schedule_bitserial_conv2d(wkl, layout):
 
 
 # @bitserial_conv2d_nhwc.register("arm_cpu")
-# @autotvm.task.dispatcher
 # def bitserial_conv2d_arm_cpu_arg_to_workload(data, kernel, stride, padding, activation_bits, weight_bits,
 #                      pack_dtype=None, out_dtype=None, dorefa=False):
 #     if out_dtype is None:
@@ -87,15 +86,17 @@ def _get_schedule_bitserial_conv2d(wkl, layout):
 #     return ('bitserial_conv2d', ) + autotvm.task.args_to_workload(
 #         [data, kernel, stride, padding, activation_bits, weight_bits, out_dtype])
 
-
-def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC):
-    kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
+def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, bitpack=True):
+    if bitpack:
+        kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
+    else:
+        kernel_q = kernel
     KH, KW, KB, CI, CO = kernel_q.shape
     kvshape = (CO//VC, KH, KW, KB, VC, CI)
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
-# TODO: support kernel prepacking and fallback support
+# TODO: support kernel prepacking
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits, 
                       pack_dtype, out_dtype, dorefa, shift=None):
@@ -106,9 +107,11 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     # sch = _get_schedule(wkl, "NHWC")
     
     N, H, W, CI = get_const_tuple(data.shape)
-    KH, KW, _, CO = get_const_tuple(kernel.shape)
-    # OCO, KH, KW, KB, VC, _ = kernel_vec.shape
-    CI_packed = CI // 8
+    if len(kernel.shape) == 4:
+        KH, KW, _, CO = get_const_tuple(kernel.shape)
+        CI_packed = CI // 8
+    else:
+        KH, KW, KB, CI_packed, CO = get_const_tuple(kernel.shape)
 
     # HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
     TPAD, LPAD, DPAD, RPAD = padding
@@ -124,7 +127,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     OH = (PAD_H - KH) // HSTR + 1
     OW = (PAD_W - KW) // WSTR + 1
     oshape = (1, OH, OW, CO)
-
     # ==================== define configuration space ====================
     n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
     ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
@@ -157,7 +159,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     VW = cfg["tile_ow"].size[-1]
 
     data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
-    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC)
+    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, len(kernel.shape) == 4)
     N, H, W, IB, CI = data_q.shape
     OCO, KH, KW, KB, VC, _ = kernel_vec.shape
 
@@ -305,7 +307,7 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
 
 # ARM specific schedule that using custom microkernel
 def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
-                                  kernel, kernel_q, kernel_vec,
+                                  kernel_q, kernel_vec,
                                   conv_out, output, last, dorefa):
     # no stride and padding info here
     _, H, W, IB, CI = data_q.shape
@@ -407,13 +409,11 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     return s
 
 # @generic.schedule_bitserial_conv2d_nhwc.register(["arm_cpu"])
-# TODO: traverse_inline
 @autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
     """Raspberry pi schedule for bitserial conv2d"""
     s = tvm.create_schedule([x.op for x in outs])
     scheduled_ops = []
-    # print ("ARM_CPU schedule")
     def traverse(op):
         """Traverse operators from computation graph"""
         # inline all one-to-one-mapping operators except the last stage (output)
@@ -429,10 +429,10 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             conv_out = op.input_tensors[0]
             kernel_vec = conv_out.op.input_tensors[0]
             kernel_q = kernel_vec.op.input_tensors[0]
-            kernel = kernel_q.op.input_tensors[0]
-            if "QuantizeInput" in kernel.op.name:
-                # Need to go up 1 further, from the combine in bitpack
-                kernel = kernel.op.input_tensors[0]
+            # kernel = kernel_q.op.input_tensors[0]
+            # if "QuantizeInput" in kernel.op.name:
+            #     # Need to go up 1 further, from the combine in bitpack
+            #     kernel = kernel.op.input_tensors[0]
             data_vec = conv_out.op.input_tensors[1]
             data_q = data_vec.op.input_tensors[0]
             data = data_q.op.input_tensors[0]
@@ -446,9 +446,8 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
                 data = data.op.input_tensors[0]
             dorefa = "dorefa" in conv_out.op.tag
             _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
-                                          kernel, kernel_q, kernel_vec, conv_out, output, outs[0], dorefa)
+                                          kernel_q, kernel_vec, conv_out, output, outs[0], dorefa)
         scheduled_ops.append(op)
 
     traverse(outs[0].op)
-    # print("Done with ARM_CPU schedule")
     return s

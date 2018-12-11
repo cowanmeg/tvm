@@ -158,8 +158,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
 
-    print (VC, VH, VW, cfg['tile_ci'])
-
     data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
     kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, len(kernel.shape) == 4)
     N, H, W, IB, CI = data_q.shape

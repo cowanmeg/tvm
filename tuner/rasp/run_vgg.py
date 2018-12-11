@@ -21,10 +21,14 @@ import tvm.contrib.graph_runtime as runtime
 target = tvm.target.arm_cpu("rasp3b")
 target_host = 'llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon'
 device_key = 'rpi3b'
-# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vgg11_rasp3b.log'
-log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/empty.log'
+host = '10.77.1.69'
+port = 9090
+remote = rpc.connect(host, port)
+ctx = remote.context(str(target), 0)
+log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vgg11_rasp3b.log'
+# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/empty.log'
 
-def measure_best():
+def load_network():
      # compile kernels with history best records
     net, params, dtypes, input_shape, output_shape = get_network()
     print("Compile...")
@@ -34,7 +38,6 @@ def measure_best():
                 net, target=target, target_host=target_host,
                 shape={'data': input_shape}, params=params, dtype=dtypes)
 
-
     # export library
     tmp = tempdir()
     filename = "net.tar"
@@ -42,20 +45,18 @@ def measure_best():
 
     # upload module to device
     print("Upload...")
-    host = '10.77.1.69'
-    port = 9090
-    remote = rpc.connect(host, port)
-
     remote.upload(tmp.relpath(filename))
     rlib = remote.load_module(filename)
 
     # upload parameters to device
-    ctx = remote.context(str(target), 0)
     module = runtime.create(graph, rlib, ctx)
-    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype('float32'))
+    return module, params
+    
+
+def time(module, params):
+    data_tvm = tvm.nd.array((np.random.uniform(size=(1, 224, 224, 3))).astype('float32'))
     module.set_input('data', data_tvm)
     module.set_input(**params)
-
     # evaluate
     print("Evaluate inference time cost...")
     ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=30)
@@ -63,6 +64,15 @@ def measure_best():
     print("Mean inference time (std dev): %.2f ms (%.2f ms)" %
             (np.mean(prof_res), np.std(prof_res)))
 
+def run(module, params, data):
+    data_tvm = tvm.nd.array(data)
+    module.set_input('data', data_tvm)
+    module.set_input(**params)
+    out =  module.get_output(0, tvm.nd.empty((1, 1000), 'float32', ctx=ctx)).asnumpy()
+    return out
+
 
 if __name__ == '__main__':
-    measure_best()
+    module, params = load_network()
+    time(module, params)
+    run(module, params, np.random.uniform(size=(1, 224, 224, 3)).astype('float32'))

@@ -21,8 +21,8 @@ import tvm.contrib.graph_runtime as runtime
 target = tvm.target.arm_cpu("rasp3b")
 target_host = 'llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon'
 device_key = 'rpi3b'
-log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vgg11_rasp3b.log'
-
+# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vgg11_rasp3b.log'
+log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/empty.log'
 
 def measure_best():
      # compile kernels with history best records

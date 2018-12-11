@@ -111,7 +111,9 @@ def load_parameter():
             params[key] = weights_bitpacked.asnumpy()
             dtypes[key] = kernel_pack_dtype
         elif 'conv2d' in layer.name:
-            params[layer.name + '_weight'] = get_numpy(sess, layer.weights)[0]
+            weights_hwio = layer.weights[0]
+            # weights_oihw =  tf.transpose(layer.weights[0], [3, 2, 0, 1])
+            params[layer.name + '_weight'] = get_numpy(sess, weights_hwio)
             dtypes[layer.name + '_weight'] = 'float32'
             params[layer.name + '_bias'] = get_numpy(sess, layer.weights)[1]
             dtypes[layer.name + '_bias'] = 'float32'
@@ -238,6 +240,7 @@ def load_layers():
             network = sym.right_shift_channelwise(network, axis=3, name=layer.name+'shift')
             
         elif 'conv2d' in layer.name:
+            # This is the first layer - compute in NCHW
             channels = layer.filters
             kernel_size = layer.kernel_size
             strides = layer.strides

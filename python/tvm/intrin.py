@@ -376,6 +376,22 @@ def popcount(x):
     """
     return call_pure_intrin(x.dtype, "popcount", x)
 
+def fmod(x, y):
+    """Return the remainder of x divided by y with the same sign as x.
+
+    Parameters
+    ----------
+    x : Expr
+        Input argument.
+    y : Expr
+        Input argument.
+
+    Returns
+    -------
+    z : Expr
+        The result.
+    """
+    return call_pure_intrin(x.dtype, "fmod", x, y)
 
 # Intrinsic rule related code
 def register_intrin_rule(target, intrin, f=None, override=False):
@@ -476,6 +492,3 @@ def _rule_float_direct(op):
 register_intrin_rule("opencl", "exp", _rule_float_direct, override=True)
 # default pattern for exp
 register_intrin_rule("default", "exp", _rule_float_suffix, override=True)
-
-# default pattern for sigmoid
-register_intrin_rule("default", "sigmoid", lambda op: 1.0 / (1.0 + exp(-op.args[0])))

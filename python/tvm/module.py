@@ -6,6 +6,7 @@ from collections import namedtuple
 
 from ._ffi.function import ModuleBase, _set_class_module
 from ._ffi.function import _init_api
+from ._ffi.libinfo import find_include_path
 from .contrib import cc as _cc, tar as _tar, util as _util
 
 ProfileResult = namedtuple("ProfileResult", ["mean", "results"])
@@ -87,7 +88,7 @@ class Module(ModuleBase):
             If fcompile has attribute object_format, will compile host library
             to that format. Otherwise, will use default format "o".
 
-        kwargs : dict, optiona;
+        kwargs : dict, optional
             Additional arguments passed to fcompile
         """
         if self.type_key == "stackvm":
@@ -97,17 +98,21 @@ class Module(ModuleBase):
             self.save(file_name)
             return
 
-        if self.type_key != "llvm":
-            raise ValueError("Module[%s]: Only llvm support export shared" % self.type_key)
+        if not (self.type_key == "llvm" or self.type_key == "c"):
+            raise ValueError("Module[%s]: Only llvm and c support export shared" % self.type_key)
         temp = _util.tempdir()
         if fcompile is not None and hasattr(fcompile, "object_format"):
             object_format = fcompile.object_format
         else:
-            object_format = "o"
+            if self.type_key == "llvm":
+                object_format = "o"
+            else:
+                assert self.type_key == "c"
+                object_format = "cc"
         path_obj = temp.relpath("lib." + object_format)
         self.save(path_obj)
         files = [path_obj]
-        is_system_lib = self.get_function("__tvm_is_system_module")()
+        is_system_lib = self.type_key == "llvm" and self.get_function("__tvm_is_system_module")()
         if self.imported_modules:
             path_cc = temp.relpath("devc.cc")
             with open(path_cc, "w") as f:
@@ -118,6 +123,8 @@ class Module(ModuleBase):
                 fcompile = _tar.tar
             else:
                 fcompile = _cc.create_shared
+        if self.type_key == "c":
+            kwargs.update({'options': ["-I" + path for path in find_include_path()]})
         fcompile(file_name, files, **kwargs)
 
     def time_evaluator(self, func_name, ctx, number, repeat=1):

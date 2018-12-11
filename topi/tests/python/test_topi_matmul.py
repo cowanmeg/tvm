@@ -27,7 +27,7 @@ def verify_matmul(sa, sb, transp_a, transp_b):
     c1 = np.matmul(np.transpose(a) if transp_a else a,
                    np.transpose(b) if transp_b else b)
     c2 = with_tvm(lambda A,B: topi.matmul(A,B,transp_a,transp_b), a,b)
-    np.testing.assert_allclose(c1, c2, rtol=1e-5, atol=1e-5)
+    tvm.testing.assert_allclose(c1, c2, rtol=1e-5, atol=1e-5)
 
 def test_matmul():
     verify_matmul((1,1),(1,1),False,False)
@@ -39,6 +39,23 @@ def test_matmul():
     verify_matmul((3,5),(3,2),True,False)
     verify_matmul((3,5),(2,3),True,True)
 
+def verify_tensordot(sa, sb, axes):
+    a = np.random.uniform(low=-1.0, high=1.0, size=sa).astype(np.float32)
+    b = np.random.uniform(low=-1.0, high=1.0, size=sb).astype(np.float32)
+    c1 = np.tensordot(a, b, axes)
+    c2 = with_tvm(lambda A, B: topi.tensordot(A, B, axes), a, b)
+    tvm.testing.assert_allclose(c1, c2, rtol=1e-5, atol=1e-5)
+
+def test_tensordot():
+    verify_tensordot((3), (3), 0)
+    verify_tensordot((2, 3), (3, 5), 1)
+    verify_tensordot((2, 2, 3), (2, 3, 5), 2)
+    verify_tensordot((2, 2, 3, 4), (2, 3, 4, 5), 3)
+    verify_tensordot((3, 2, 2), (2, 3, 5), (1, 0))
+    verify_tensordot((3, 2, 2), (2, 3, 5), ((1, 0), (0, 1)))
+    verify_tensordot((4, 3, 2, 2), (2, 4, 3, 5), ((1, 2, 0), (2, 0, 1)))
+
 if __name__ == "__main__":
     test_matmul()
+    test_tensordot()
 

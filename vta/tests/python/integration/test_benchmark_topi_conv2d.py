@@ -33,6 +33,7 @@ def test_cpu_conv2d():
         res_conv = topi.nn.conv2d(
             data, kernel, padding=(wl.hpad, wl.wpad),
             strides=(wl.hstride, wl.wstride),
+            dilation=(1, 1),
             out_dtype="int32")
         res = topi.right_shift(res_conv, 8)
         res = my_clip(res, 0, 127)
@@ -87,7 +88,7 @@ def test_cpu_conv2d():
                 padding = wl.hpad
                 res_ref = res_ref >> 8
                 res_ref = np.clip(res_ref, 0, 127).astype("int8")
-                np.testing.assert_allclose(res_unpack, res_ref)
+                tvm.testing.assert_allclose(res_unpack, res_ref)
             return cost
 
         def conv_normal(print_ir):
@@ -219,7 +220,7 @@ def test_vta_conv2d():
                 res_ref = res_ref >> 8
                 res_ref += bias_orig.reshape(wl.out_filter, 1, 1)
                 res_ref = np.clip(res_ref, 0, 127).astype("int8")
-                np.testing.assert_allclose(res_unpack, res_ref)
+                tvm.testing.assert_allclose(res_unpack, res_ref)
             return cost
 
         def conv_normal(print_ir):

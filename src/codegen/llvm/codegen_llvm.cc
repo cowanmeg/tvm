@@ -788,11 +788,7 @@ DEFINE_CODEGEN_CMP_OP(GE);
 llvm::Value* CodeGenLLVM::VisitExpr_(const Div* op) {
   llvm::Value* a = MakeValue(op->a);
   llvm::Value* b = MakeValue(op->b);
-  int shift;
-  if ((op->type.is_int() || op->type.is_uint()) &&
-      is_const_power_of_two_integer(op->b, &shift)) {
-    return builder_->CreateAShr(a, shift);
-  } else if (op->type.is_int()) {
+  if (op->type.is_int()) {
     return builder_->CreateSDiv(a, b);
   } else if (op->type.is_uint()) {
     return builder_->CreateUDiv(a, b);
@@ -1049,8 +1045,10 @@ void CodeGenLLVM::VisitStmt_(const Allocate* op) {
     if (info.alignment > 16) {
       info.alignment = 16;
     }
-    llvm::AllocaInst* alloca = builder_->CreateAlloca(
-        LLVMType(op->type), ConstInt32(constant_size));
+    llvm::AllocaInst* alloca = WithFunctionEntry([&]() {
+        return builder_->CreateAlloca(
+            LLVMType(op->type), ConstInt32(constant_size));
+      });
     if (alloca->getAlignment() < static_cast<uint32_t>(info.alignment)) {
       alloca->setAlignment(info.alignment);
     }

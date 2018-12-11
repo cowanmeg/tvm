@@ -13,6 +13,7 @@
 #include "compute_op.h"
 #include "op_util.h"
 #include "../schedule/message_passing.h"
+#include "../arithmetic/compute_expr.h"
 
 namespace tvm {
 
@@ -320,27 +321,32 @@ Stmt MakeComputeStmt(const ComputeOpNode* self,
       source.push_back(stage->op.output(i));
     }
     MakeReduction(self, source, &init, &provide);
-    init = op::Substitute(init, n.init_vmap);
     init = MergeNest(n.init_nest, init);
+    init = op::Substitute(init, n.init_vmap);
     // common nest
     std::vector<std::vector<Stmt> > common(
         n.main_nest.begin(), n.main_nest.begin() + n.num_common_loop + 1);
     std::vector<std::vector<Stmt> > reduce(
         n.main_nest.begin() + n.num_common_loop + 1, n.main_nest.end());
-    provide = op::Substitute(provide, n.main_vmap);
     provide = MergeNest(reduce, provide);
     if (debug_keep_trivial_loop) {
-      return MergeNest(common, provide);
+      provide = MergeNest(common, provide);
     } else {
-      return MergeNest(common, Block::make(init, provide));
+      provide = MergeNest(common, Block::make(init, provide));
     }
+    // run substitution in the on the full nest, because  loop condition
+    // could depend on outer loops.
+    return op::Substitute(provide, n.main_vmap);
   } else {
     std::vector<Stmt> provides;
     for (size_t i = 0; i < self->body.size(); ++i) {
       provides.emplace_back(MakeProvide(self, stage->op.output(i)));
     }
-    Stmt provide = op::Substitute(Block::make(provides), n.main_vmap);
-    return MergeNest(n.main_nest, provide);
+    Stmt provide = Block::make(provides);
+    provide = MergeNest(n.main_nest, provide);
+    // run substitution in the on the full nest, because  loop condition
+    // could depend on outer loops.
+    return op::Substitute(provide, n.main_vmap);
   }
 }
 
@@ -545,4 +551,38 @@ static void VerifyComputeOp(const ComputeOpNode* op) {
   v.Run();
 }
 
+Stmt TransformUpdate(const Stage& stage,
+                     const std::unordered_map<IterVar, Range>& dom_map,
+                     const ComputeLoopNest& n,
+                     Stmt body,
+                     Stmt update) {
+  Array<Expr> conds;
+  std::unordered_set<const Variable*> banned;
+  for (size_t i = 0; i < stage->leaf_iter_vars.size(); ++i) {
+    IterVar iv = stage->leaf_iter_vars[i];
+    auto iit = stage->iter_var_attrs.find(iv);
+    if (iit != stage->iter_var_attrs.end()) {
+      const IterVarAttr& attr = (*iit).second;
+      if (attr->iter_type == kTensorized) {
+        break;
+      }
+    }
+    if (iv->iter_type == kCommReduce) {
+      auto vit = dom_map.find(iv);
+      CHECK(vit != dom_map.end());
+      const Range& vrange = vit->second;
+      conds.push_back(likely(iv->var > vrange->min));
+      banned.insert(iv->var.get());
+    }
+  }
+  for (const Expr& pred : n.main_predicates) {
+    if (ir::ExprUseVar(pred, banned)) {
+      LOG(FATAL) << "Tensorize update transform failed, the condition "
+                 << pred << " has a conflict with the reset condition";
+    }
+  }
+
+  return IfThenElse::make(arith::ComputeReduce<ir::Or>(conds, const_true(1)),
+                          update, body);
+}
 }  // namespace tvm

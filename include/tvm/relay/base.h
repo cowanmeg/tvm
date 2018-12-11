@@ -22,8 +22,15 @@ namespace tvm {
  * You can find more about Relay by reading the language reference.
  */
 namespace relay {
+
+#define RELAY_DEBUG(...) \
+{ auto fdebug = runtime::Registry::Get("relay.debug"); \
+  CHECK(fdebug) << "Could not find Relay Python debugger function."; \
+  (*fdebug)("RELAY_DEBUG", __FILE__, __LINE__, __VA_ARGS__); \
+}
+
 /*!
- * \brief we always used NodeRef for referencing nodes.
+ * \brief We always used NodeRef for referencing nodes.
  *
  *  By default, NodeRef is a std::shared_ptr of node
  */
@@ -158,7 +165,35 @@ class RelayNode : public Node {
   TVM_DECLARE_BASE_NODE_INFO(RelayNode, Node);
 };
 
-struct Environment;
+/*!
+ * \brief The unique identifier of variables.
+ *
+ * Id is like name to the variables,
+ * except that id is unique for each Var.
+ *
+ * \note Do not create Id directly, they are created in Var.
+ */
+class IdNode : public Node {
+ public:
+  /*!
+   * \brief The name of the variable,
+   *  this only acts as a hint to the user,
+   *  and is not used for equality.
+   */
+  std::string name_hint;
+
+  void VisitAttrs(tvm::AttrVisitor* v) final {
+    v->Visit("name_hint", &name_hint);
+  }
+
+  static constexpr const char* _type_key = "relay.Id";
+  TVM_DECLARE_NODE_TYPE_INFO(IdNode, Node);
+};
+
+RELAY_DEFINE_NODE_REF(Id, IdNode, NodeRef);
+
+
+struct Module;
 
 }  // namespace relay
 }  // namespace tvm

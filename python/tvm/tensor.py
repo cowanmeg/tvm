@@ -30,6 +30,11 @@ class TensorSlice(NodeGeneric, _expr.ExprOp):
         """Data content of the tensor."""
         return self.tensor.dtype
 
+@register_node
+class TensorIntrinCall(NodeBase):
+    """Intermediate structure for calling a tensor intrinsic."""
+    pass
+
 
 itervar_cls = None
 
@@ -106,6 +111,7 @@ class Tensor(NodeBase, _expr.ExprOp):
         return "%s.v%d" % (op.name, self.value_index)
 
 
+
 class Operation(NodeBase):
     """Represent an operation that generate a tensor"""
 
@@ -156,6 +162,12 @@ class ComputeOp(Operation):
 
 
 @register_node
+class TensorComputeOp(Operation):
+    """Tensor operation."""
+    pass
+
+
+@register_node
 class ScanOp(Operation):
     """Scan operation."""
     @property
@@ -167,4 +179,9 @@ class ScanOp(Operation):
 @register_node
 class ExternOp(Operation):
     """Extern operation."""
+    pass
+
+@register_node
+class HybridOp(Operation):
+    """Hybrid operation."""
     pass

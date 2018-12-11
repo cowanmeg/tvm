@@ -58,7 +58,8 @@ class TaskExtractEnv:
         # NOTE: To add more symbols, you only need to change the following lists
         # nnvm symbol -> topi compute
         self.symbol2topi = {
-            nnvm.sym.conv2d: [topi.nn.conv2d, topi.nn.depthwise_conv2d_nchw],
+            nnvm.sym.conv2d: [topi.nn.conv2d, topi.nn.depthwise_conv2d_nchw,
+                              topi.nn.group_conv2d_nchw],
             nnvm.sym.conv2d_transpose: [topi.nn.conv2d_transpose_nchw],
             nnvm.sym.dense: [topi.nn.dense],
             nnvm.sym.bitserial_conv2d: [topi.nn.bitserial_conv2d_nhwc],
@@ -69,6 +70,7 @@ class TaskExtractEnv:
         self.topi_to_task = {
             topi.nn.conv2d: "topi_nn_conv2d",
             topi.nn.depthwise_conv2d_nchw: "topi_nn_depthwise_conv2d_nchw",
+            topi.nn.group_conv2d_nchw: "topi_nn_group_conv2d_nchw",
             topi.nn.conv2d_transpose_nchw: "topi_nn_conv2d_transpose_nchw",
             topi.nn.dense: "topi_nn_dense",
             topi.nn.bitserial_conv2d_nhwc: "topi_nn_bitserial_conv2d_nhwc",
@@ -80,6 +82,7 @@ class TaskExtractEnv:
                              topi.generic.schedule_conv2d_nhwc],
             topi.nn.depthwise_conv2d_nchw: [topi.generic.schedule_depthwise_conv2d_nchw,
                                             topi.generic.schedule_depthwise_conv2d_nhwc],
+            topi.nn.group_conv2d_nchw: [topi.generic.schedule_group_conv2d_nchw],
             topi.nn.conv2d_transpose_nchw: [topi.generic.schedule_conv2d_transpose_nchw],
             topi.nn.dense: [topi.generic.schedule_dense],
             topi.nn.bitserial_conv2d_nhwc: [topi.generic.schedule_bitserial_conv2d_nhwc],
@@ -147,6 +150,15 @@ class TaskExtractEnv:
             A, W = args[:2]
             C = topi.nn.depthwise_conv2d_nchw(*args, **kwargs)
             s = topi.generic.schedule_depthwise_conv2d_nchw([C])
+            return s, [A, W, C]
+
+        @register("topi_nn_group_conv2d_nchw")
+        def _topi_nn_group_conv2d_nchw(*args, **kwargs):
+            assert not kwargs, "Do not support kwargs in template function call"
+            args = deserialize_args(args)
+            A, W = args[:2]
+            C = topi.nn.group_conv2d_nchw(*args, **kwargs)
+            s = topi.generic.schedule_group_conv2d_nchw([C])
             return s, [A, W, C]
 
         @register("topi_nn_conv2d_transpose_nchw")

@@ -206,6 +206,8 @@ constexpr const char* scan_init_scope = "scan_init_scope";
  *  This gives hint to require stride of dim to be k * align + offset.
  */
 constexpr const char* buffer_dim_align = "buffer_dim_align";
+/*! \brief Mark stores/loads with theirs bounds.  */
+constexpr const char* buffer_bound = "buffer_bound";
 /*!
  * \brief Bind the buffer specification to the region of the op
  *  When this scope occurs, the stmt.node is a Array<NodeRef> = [buffer, tensor]
@@ -236,6 +238,11 @@ constexpr const char* pipeline_exec_scope = "pipeline_exec_scope";
  * Store statement.
  */
 constexpr const char* opengl_stage_scope = "opengl_stage_scope";
+
+/*!
+ * \brief Mark that it is in the device scope.
+ */
+constexpr const char* device_scope = "device_scope";
 
 /*!
  * \brief Check if attr_key is a pragma key extension

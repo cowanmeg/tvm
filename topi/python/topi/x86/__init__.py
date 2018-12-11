@@ -10,4 +10,4 @@ from .injective import *
 from .pooling import schedule_pool, schedule_global_pool
 from .bitserial_conv2d import schedule_bitserial_conv2d
 from .bitserial_dense import schedule_bitserial_dense
-
+from .depthwise_conv2d import schedule_depthwise_conv2d_NCHWc

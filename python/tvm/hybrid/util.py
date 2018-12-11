@@ -2,6 +2,8 @@
 
 import ast
 import inspect
+import logging
+import sys
 import numpy
 from .intrin import HYBRID_GLOBALS
 from .._ffi.base import numeric_types
@@ -13,8 +15,13 @@ from ..tensor import Tensor
 
 #pylint: disable=invalid-name
 np_arg_types = tuple(list(numeric_types) + [numpy.ndarray])
-tvm_arg_types = (Tensor, _expr.Var)
+tvm_arg_types = (Tensor, _expr.Var, _expr.ConstExpr)
 halide_imm_types = (_expr.IntImm, _expr.FloatImm, _expr.UIntImm)
+
+def _internal_assert(cond, err):
+    """Simplify the code segment like if not XXX then raise an error"""
+    if not cond:
+        raise ValueError(err)
 
 
 # Useful constants. In avoid of runtime dependences, we use function calls to return them.
@@ -30,10 +37,17 @@ def is_docstring(node):
 
 def _pruned_source(func):
     """Prune source code's extra leading spaces"""
-    lines = inspect.getsource(func).split('\n')
-    leading_space = len(lines[0]) - len(lines[0].lstrip(' '))
-    lines = [line[leading_space:] for line in lines]
-    return '\n'.join(lines)
+    try:
+        lines = inspect.getsource(func).split('\n')
+        leading_space = len(lines[0]) - len(lines[0].lstrip(' '))
+        lines = [line[leading_space:] for line in lines]
+        return '\n'.join(lines)
+    except IOError as err:
+        if sys.version_info[0] == 2 and str(err) == 'could not get source code':
+            logging.log(logging.CRITICAL, \
+                        'This module is not fully operated under Python2... ' \
+                        'Please move to Python3!')
+            raise err
 
 
 def _is_tvm_arg_types(args):
@@ -41,14 +55,16 @@ def _is_tvm_arg_types(args):
     If neither is true, raise a value error."""
     if isinstance(args[0], tvm_arg_types):
         for elem in args[1:]:
-            if not isinstance(elem, tvm_arg_types):
-                raise ValueError("Expect a Var or Tensor instance but % get!" % str(type(elem)))
+            _internal_assert(isinstance(elem, tvm_arg_types),
+                             "Expecting a Var, Tensor or ConstExpr instance but %s get!" \
+                             % str(type(elem)))
         return True
-    if not isinstance(args[0], np_arg_types):
-        raise ValueError("Expect a numpy type but % get!" % str(type(args[0])))
+
+    _internal_assert(isinstance(args[0], np_arg_types), \
+                     "Expect a numpy type but %s get!" % str(type(args[0])))
     for elem in args[1:]:
-        if not isinstance(elem, np_arg_types):
-            raise ValueError("Expect a numpy type but % get!" % str(type(elem)))
+        _internal_assert(isinstance(elem, np_arg_types), \
+                         "Expect a numpy type but %s get!" % str(type(elem)))
     return False
 
 

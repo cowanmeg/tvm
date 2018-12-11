@@ -236,6 +236,24 @@ class Canonical::Internal : public IRMutator {
   bool EnableOpt(Type t) const {
     return (t.lanes() == 1 && (t.is_int() || t.is_uint()));
   }
+  // Max
+  Expr Mutate_(const Max* op, const Expr& e) final {
+    CacheEntry a = Produce(op->a);
+    CacheEntry b = Produce(op->b);
+    if (a.has_side_effect || b.has_side_effect) {
+      return Binary_(op, e, a.value, b.value);
+    }
+    return Binary(op, e);
+  }
+  // Min
+  Expr Mutate_(const Min* op, const Expr& e) final {
+    CacheEntry a = Produce(op->a);
+    CacheEntry b = Produce(op->b);
+    if (a.has_side_effect || b.has_side_effect) {
+      return Binary_(op, e, a.value, b.value);
+    }
+    return Binary(op, e);
+  }
   // Add
   Expr Mutate_(const Add* op, const Expr& e) final {
     if (!EnableOpt(op->type)) {
@@ -277,7 +295,7 @@ class Canonical::Internal : public IRMutator {
     } else if (is_const(b.value)) {
       return SumMulConst(a.AsSum(), b.value);
     } else {
-      return Binary_(op, e, a.value, b.value);
+      return Binary(op, e);
     }
   }
   // Variable
@@ -515,7 +533,15 @@ class Canonical::Internal : public IRMutator {
         n->elem.push_back(e);
       }
       Expr ret = Sum2Expr(ComExpr(n), v.type()) % v;
-      return Binary(ret.as<Mod>(), ret);
+      if (const Mod* mod = ret.as<Mod>()) {
+        return Binary(mod, ret);
+      } else {
+        // Sometimes the result is a constant, this may happen when value is -1
+        CHECK(is_const(ret)) << "CanonicalSimplify: "
+          << Sum2Expr(ComExpr(n), v.type()) << " % " << v << " is " << ret
+          << " which is neither Mod, nor a constant";
+        return ret;
+      }
     }
     ret_entry_.sum = pair[1];
     ret_entry_.max_level = stack_.back().max_level;

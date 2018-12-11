@@ -4,7 +4,7 @@ from __future__ import absolute_import
 
 import tvm
 import topi
-from topi.util import get_const_int
+from topi.util import get_const_int, get_const_tuple
 from .tensor import _fschedule_broadcast, _fschedule_injective
 from . import registry as reg
 from .registry import OpPattern
@@ -94,37 +94,32 @@ def compute_conv2d(attrs, inputs, _):
     (dilation_h, dilation_w) = dilation
     if dilation_h < 1 or dilation_w < 1:
         raise ValueError("dilation should be positive value")
-    elif layout == "NCHW4c" and (dilation_h > 1 or dilation_w > 1):
-        raise ValueError("not support dilate now")
-    elif dilation == (1, 1):
-        kernel = inputs[1]
-    elif layout == "NCHW":
-        kernel = topi.nn.dilate(inputs[1], [1, 1, dilation_h, dilation_w])
-    else: #layout == NHWC
-        kernel = topi.nn.dilate(inputs[1], [1, dilation_h, dilation_w, 1])
 
     if groups == 1 and layout == 'NCHW4c' and inputs[0].dtype == 'int8':
         # pylint: disable=assignment-from-no-return
-        out = topi.nn.conv2d_NCHWc_int8_prepacked(inputs[0], kernel, strides, padding,
-                                                  layout, out_dtype=out_dtype)
+        out = topi.nn.conv2d(inputs[0], inputs[1], strides, padding,
+                             dilation, layout, out_dtype=out_dtype)
         # pylint: enable=assignment-from-no-return
     elif layout == "NHWC":
         # Temporary band-aid to get rasp working
         out = topi.nn.conv2d_nhwc(inputs[0], kernel, strides, padding, out_dtype)
     elif groups == 1:
         out = topi.nn.conv2d(
-            inputs[0], kernel, strides, padding, layout, out_dtype=out_dtype)
+            inputs[0], inputs[1], strides, padding, dilation, layout, out_dtype=out_dtype)
     elif layout == "NCHW" and \
          groups == get_const_int(inputs[0].shape[1]) and \
          groups == channels:
         out = topi.nn.depthwise_conv2d_nchw(
-            inputs[0], kernel, strides, padding, out_dtype=out_dtype)
+            inputs[0], inputs[1], strides, padding, dilation, out_dtype=out_dtype)
+    elif layout in ["NCHW", "NCHW4c"]:
+        out = topi.nn.group_conv2d_nchw(inputs[0], inputs[1], strides, padding, dilation, groups,
+                                        out_dtype=out_dtype)
     elif layout == "NHWC" and \
          kernel_layout == "HWOI" and \
          groups == get_const_int(inputs[0].shape[3]) and \
          groups == channels:
         out = topi.nn.depthwise_conv2d_nhwc(
-            inputs[0], kernel, strides, padding, out_dtype=out_dtype)
+            inputs[0], inputs[1], strides, padding, dilation, out_dtype=out_dtype)
     else:
         raise ValueError("not support arbitrary group number for now")
 
@@ -147,13 +142,15 @@ def schedule_conv2d(attrs, outs, target):
         if groups == 1 and layout == "NCHW":
             return topi.generic.schedule_conv2d_nchw(outs)
         elif groups == 1 and layout == "NCHW4c":
-            return topi.generic.schedule_conv2d_NCHWc_int8_prepacked(outs)
+            return topi.generic.schedule_conv2d_nchw(outs)
         elif groups == 1 and layout == "NHWC":
             return topi.generic.schedule_conv2d_nhwc(outs)
         elif groups == channels and layout == "NCHW":
             return topi.generic.schedule_depthwise_conv2d_nchw(outs)
         elif groups == channels and layout == "NHWC" and kernel_layout == "HWOI":
             return topi.generic.schedule_depthwise_conv2d_nhwc(outs)
+        elif layout in ["NCHW", "NCHW4c"]:
+            return topi.generic.schedule_group_conv2d_nchw(outs)
         else:
             raise ValueError("No compatible schedule")
 
@@ -170,16 +167,22 @@ def compute_contrib_conv2d_NCHWc(attrs, inputs, _):
     padding = attrs.get_int_tuple("padding")
     strides = attrs.get_int_tuple("strides")
     dilation = attrs.get_int_tuple("dilation")
-    kh, kw = attrs.get_int_tuple('kernel_size')
+    out_channel = attrs.get_int("channels")
     groups = attrs.get_int("groups")
-    channels = attrs.get_int("channels")
     layout = attrs.get_string("layout")
     out_layout = attrs.get_string("out_layout")
+    out_dtype = attrs.get_string("out_dtype")
+    out_dtype = inputs[0].dtype if out_dtype == "same" else out_dtype
+    _, in_channel_chunk, _, _, in_channel_block = get_const_tuple(inputs[0].shape)
+    in_channel = in_channel_chunk * in_channel_block
     assert dilation == (1, 1), "not support dilate now"
     if groups == 1:
         # pylint: disable=assignment-from-no-return
-        out = topi.nn.conv2d_NCHWc(inputs[0], inputs[1], channels, (kh, kw),
-                                   strides, padding, layout, out_layout)
+        out = topi.nn.conv2d_NCHWc(inputs[0], inputs[1], strides, padding, dilation,
+                                   layout, out_layout, out_dtype)
+    elif groups == in_channel and groups == out_channel:
+        out = topi.nn.depthwise_conv2d_NCHWc(inputs[0], inputs[1], strides, padding,
+                                             dilation, layout, out_layout, out_dtype)
         # pylint: enable=assignment-from-no-return
     else:
         raise ValueError("not support arbitrary group number > 1 for now")
@@ -193,16 +196,12 @@ def compute_contrib_conv2d_NCHWc(attrs, inputs, _):
 def schedule_contrib_conv2d_NCHWc(attrs, outs, target):
     """Schedule definition of conv2d NCHWc"""
     groups = attrs.get_int("groups")
-    kh, kw = attrs.get_int_tuple('kernel_size')
-    oc = attrs.get_int("channels")
-    padding = attrs.get_int_tuple("padding")
-    strides = attrs.get_int_tuple("strides")
-    layout = attrs.get_string("layout")
-    out_layout = attrs.get_string("out_layout")
+    out_channel = attrs.get_int("channels")
     with tvm.target.create(target):
         if groups == 1:
-            return topi.generic.schedule_conv2d_NCHWc(oc, (kh, kw), strides, padding,
-                                                      layout, out_layout, outs)
+            return topi.generic.schedule_conv2d_NCHWc(outs)
+        elif groups == out_channel:
+            return topi.generic.schedule_depthwise_conv2d_NCHWc(outs)
         else:
             raise ValueError("not support group number > 1 for now")
 
@@ -237,7 +236,7 @@ def compute_contrib_conv2d_winograd_without_weight_transform(attrs, inputs, _):
 
     # pylint: disable=assignment-from-no-return
     out = topi.nn.conv2d_winograd_without_weight_transform(
-        inputs[0], inputs[1], strides, padding, layout, out_dtype,
+        inputs[0], inputs[1], strides, padding, dilation, layout, out_dtype,
         tile_size)
 
     if attrs.get_bool("use_bias"):

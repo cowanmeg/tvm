@@ -5,8 +5,8 @@ LoweredFunc and compiled Module.
 """
 from __future__ import absolute_import as _abs
 import warnings
-import types
 
+from ._ffi.function import Function
 from ._ffi.node import NodeBase, register_node
 from . import api
 from . import _api_internal
@@ -69,7 +69,7 @@ class DumpIR(object):
             vset[k] = v
         for k, v in vset.items():
             self._recover_list.append(recover)
-            vset[k] = self.decorate(v) if isinstance(v, types.FunctionType) else v
+            vset[k] = self.decorate(v) if isinstance(v, Function) else v
 
     def decorate_custompass(self, custom_pass):
         """decorate given list of custom passes, and return decorated passes"""
@@ -125,7 +125,8 @@ class BuildConfig(NodeBase):
         "data_alignment": -1,
         "restricted_func": True,
         "double_buffer_split_loop": 1,
-        "dump_pass_ir": False
+        "dump_pass_ir": False,
+        "instrument_bound_checkers": False
     }
     _dump_ir = DumpIR()
 
@@ -299,7 +300,7 @@ def lower(sch,
 
     Parameters
     ----------
-    sch : tvm.Schedule
+    sch : tvm.schedule.Schedule
         The schedule to be builded
 
     args : list of Buffer or Tensor or Var
@@ -340,16 +341,11 @@ def lower(sch,
         bounds = schedule.InferBound(sch)
         stmt = schedule.ScheduleOps(sch, bounds)
         stmt = ir_pass.InjectPrefetch(stmt)
-    else:
-        #So far there is no op for hybrid script, so a plain ir body is given
-        if not isinstance(sch, _stmt.Stmt):
-            raise ValueError("sch should be either a Schedule or a Stmt")
-        stmt = sch
 
     for f in lower_phase0:
         stmt = f(stmt)
     # Phase 1
-    stmt = ir_pass.StorageFlatten(stmt, binds, 64)
+    stmt = ir_pass.StorageFlatten(stmt, binds, 64, cfg.instrument_bound_checkers)
     stmt = ir_pass.CanonicalSimplify(stmt)
     for f in lower_phase1:
         stmt = f(stmt)
@@ -375,6 +371,9 @@ def lower(sch,
     stmt = ir_pass.RewriteUnsafeSelect(stmt)
     for f in lower_phase3:
         stmt = f(stmt)
+    # Instrument BoundCheckers
+    if cfg.instrument_bound_checkers:
+        stmt = ir_pass.InstrumentBoundCheckers(stmt)
     if simple_mode:
         return stmt
     return ir_pass.MakeAPI(stmt, name, arg_list, 0, cfg.restricted_func)

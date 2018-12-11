@@ -32,7 +32,6 @@
 #include <topi/vision/reorg.h>
 #include <topi/image/resize.h>
 #include <topi/vision/yolo/region.h>
-#include <topi/vision/yolo/yolo.h>
 #include <topi/generic/default.h>
 #include <topi/generic/extern.h>
 #include <topi/generic/injective.h>
@@ -60,9 +59,9 @@ using namespace tvm;
 using namespace tvm::runtime;
 
 /*! \brief Canonicalize an argument that may be Array<Expr> or int to Array<Expr> */
-Array<Expr> ArrayOrInt(TVMArgValue arg) {
+Array<Integer> ArrayOrInt(TVMArgValue arg) {
   if (arg.type_code() == kDLInt || arg.type_code() == kDLUInt) {
-    Array<Expr> result;
+    Array<Integer> result;
     result.push_back(arg.operator int());
     return result;
   } else {
@@ -307,6 +306,11 @@ TVM_REGISTER_GLOBAL("topi.where")
   *rv = where(args[0], args[1], args[2]);
 });
 
+TVM_REGISTER_GLOBAL("topi.gather_nd")
+.set_body([](TVMArgs args, TVMRetValue *rv) {
+  *rv = gather_nd(args[0], args[1]);
+});
+
 TVM_REGISTER_GLOBAL("topi.matmul")
 .set_body([](TVMArgs args, TVMRetValue *rv) {
   switch ( args.size() ) {
@@ -315,6 +319,18 @@ TVM_REGISTER_GLOBAL("topi.matmul")
     case 4: *rv = matmul(args[0], args[1], args[2], args[3]); break;
     default: CHECK(0) << "topi.matmul expects 2, 3 or 4 arguments";
   }});
+
+TVM_REGISTER_GLOBAL("topi.tensordot")
+.set_body([](TVMArgs args, TVMRetValue *rv) {
+  if (args.size() == 2) {
+    *rv = tensordot(args[0], args[1]);
+  } else if (args.size() == 3) {
+    *rv = tensordot(args[0], args[1], args[2]);
+  } else {
+    Array<Expr> axes = args[3];
+    *rv = tensordot(args[0], args[1], args[2], axes);
+  }
+  });
 
 TVM_REGISTER_GLOBAL("topi.strided_slice")
 .set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -426,11 +442,6 @@ TVM_REGISTER_GLOBAL("topi.vision.reorg")
 TVM_REGISTER_GLOBAL("topi.vision.yolo.region")
 .set_body([](TVMArgs args, TVMRetValue *rv) {
   *rv = vision::yolo::region(args[0], args[1], args[2], args[3], args[4], args[5]);
-  });
-
-TVM_REGISTER_GLOBAL("topi.vision.yolo.yolo")
-.set_body([](TVMArgs args, TVMRetValue *rv) {
-  *rv = vision::yolo::yolo(args[0], args[1], args[2]);
   });
 
 /* Ops from image/resize.h */

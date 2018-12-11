@@ -68,7 +68,7 @@ def conv2d_no_batching(N, H, W, CO, CI, KH, KW, stride, padding):
 
     data = tvm.placeholder((N, CI, H, W), name='data')
     kernel = tvm.placeholder((CO, CI, KH, KW), name='kernel')
-    conv = topi.nn.conv2d_nchw(data, kernel, stride, padding, 'float32')
+    conv = topi.nn.conv2d_nchw(data, kernel, stride, padding, dilation=1, out_dtype='float32')
     s = tvm.create_schedule([conv.op])
 
     ##### space definition begin #####
@@ -211,7 +211,7 @@ w_tvm = tvm.nd.array(w_np, ctx=ctx)
 c_tvm = tvm.nd.empty(c_np.shape, ctx=ctx)
 func(a_tvm, w_tvm, c_tvm)
 
-np.testing.assert_allclose(c_np, c_tvm.asnumpy(), rtol=1e-2)
+tvm.testing.assert_allclose(c_np, c_tvm.asnumpy(), rtol=1e-2)
 
 # Evaluate running time. Here we choose a large repeat number (400) to reduce the noise
 # and the overhead of kernel launch. You can also use nvprof to validate the result.

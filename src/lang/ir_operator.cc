@@ -310,20 +310,26 @@ Expr operator!=(Expr a, Expr b) {
 
 Expr operator&&(Expr a, Expr b) {
   using ir::UIntImm;
-  const UIntImm* pa = a.as<UIntImm>();
-  const UIntImm* pb = b.as<UIntImm>();
-  if (pa && pb) {
-    return UIntImm::make(UInt(1), pa->value && pb->value);
+  if (a.type().is_bool() && b.type().is_bool()) {
+    const UIntImm* pa = a.as<UIntImm>();
+    const UIntImm* pb = b.as<UIntImm>();
+    if (pa && pa->value) return b;
+    if (pa && !pa->value) return a;
+    if (pb && pb->value) return a;
+    if (pb && !pb->value) return b;
   }
   return ir::And::make(a, b);
 }
 
 Expr operator||(Expr a, Expr b) {
   using ir::UIntImm;
-  const UIntImm* pa = a.as<UIntImm>();
-  const UIntImm* pb = b.as<UIntImm>();
-  if (pa && pb) {
-    return UIntImm::make(UInt(1), pa->value || pb->value);
+  if (a.type().is_bool() && b.type().is_bool()) {
+    const UIntImm* pa = a.as<UIntImm>();
+    const UIntImm* pb = b.as<UIntImm>();
+    if (pa && pa->value) return a;
+    if (pa && !pa->value) return b;
+    if (pb && pb->value) return b;
+    if (pb && !pb->value) return a;
   }
   return ir::Or::make(a, b);
 }
@@ -442,6 +448,12 @@ Expr prod(Expr source, Array<IterVar> rdom) {
   ir::CommReducer combiner =
     ir::CommReducerNode::make({x}, {y}, {result}, {identity_element});
   return ir::Reduce::make(combiner, {source}, rdom, make_const(Bool(1), true), 0);
+}
+
+Expr fmod(Expr x, Expr y) {
+  BinaryOpMatchTypes(x, y);
+  CHECK(x.type().is_float()) << "fmod only applies to float";
+  return ir::Call::make(x.type(), "fmod", { x, y }, ir::Call::PureIntrinsic);
 }
 
 }  // namespace tvm

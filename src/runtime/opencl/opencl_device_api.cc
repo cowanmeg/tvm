@@ -232,7 +232,6 @@ void OpenCLWorkspace::Init(const std::string& type_key, const std::string& devic
   if (initialized_) return;
   std::lock_guard<std::mutex> lock(this->mu);
   if (initialized_) return;
-  initialized_ = true;
   if (context != nullptr) return;
   // matched platforms
   std::vector<cl_platform_id> platform_ids = cl::GetPlatformIDs();
@@ -246,6 +245,10 @@ void OpenCLWorkspace::Init(const std::string& type_key, const std::string& devic
       continue;
     }
     std::vector<cl_device_id> devices_matched = cl::GetDeviceIDs(platform_id, device_type);
+    if ((devices_matched.size() == 0) && (device_type == "gpu")) {
+      LOG(WARNING) << "Using CPU OpenCL device";
+      devices_matched = cl::GetDeviceIDs(platform_id, "cpu");
+    }
     if (devices_matched.size() > 0) {
       this->type_key = type_key;
       this->platform_id = platform_id;
@@ -271,6 +274,7 @@ void OpenCLWorkspace::Init(const std::string& type_key, const std::string& devic
         clCreateCommandQueue(this->context, did, 0, &err_code));
     OPENCL_CHECK_ERROR(err_code);
   }
+  initialized_ = true;
 }
 
 TVM_REGISTER_GLOBAL("device_api.opencl")

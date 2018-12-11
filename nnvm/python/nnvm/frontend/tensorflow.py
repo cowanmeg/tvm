@@ -9,7 +9,7 @@ import numpy as np
 import tvm
 from .. import symbol as _sym
 from .. import graph as _graph
-from .. compiler import graph_util
+from .. compiler import graph_util, build_module
 from .common import get_nnvm_op, AttrConverter as AttrConvert
 
 __all__ = ['from_tensorflow']
@@ -215,7 +215,7 @@ def _conv(opname):
                 attr['channels'] = input_shape[3] * depth_mult
 
             if 'dilations' in attr:
-                attr['dilations'] = (attr['dilations'][0], attr['dilations'][1])
+                attr['dilations'] = (attr['dilations'][1], attr['dilations'][2])
             attr['strides'] = (attr['strides'][1], attr['strides'][2])
         elif attr['data_format'] == 'NCHW':
             depth_mult, _, kernel_h, kernel_w = weights_shape
@@ -252,8 +252,12 @@ def _conv(opname):
                 in_h = input_shape[2]
                 in_w = input_shape[3]
 
-            pad_v = _get_pad_pair(in_h, kernel_h, stride_h)
-            pad_h = _get_pad_pair(in_w, kernel_w, stride_w)
+            dilation_h = attr['dilations'][0]
+            dilation_w = attr['dilations'][1]
+            dilated_kernel_h = (kernel_h - 1) * dilation_h + 1
+            dilated_kernel_w = (kernel_w - 1) * dilation_w + 1
+            pad_v = _get_pad_pair(in_h, dilated_kernel_h, stride_h)
+            pad_h = _get_pad_pair(in_w, dilated_kernel_w, stride_w)
 
             if attr['data_format'] == 'NHWC':
                 inputs[0] = _sym.pad(data=inputs[0],
@@ -306,7 +310,8 @@ def _cast():
     def _impl(inputs, attr, params):
         # Convert from tensorflow Dtype to str
         attr['DstT'] = attr['DstT'].name
-        return AttrCvt(op_name='cast', transforms={'DstT': 'dtype'}, ignores=['SrcT'])(inputs, attr)
+        return AttrCvt(op_name='cast', transforms={'DstT': 'dtype'},
+                       ignores=['SrcT', 'Truncate'])(inputs, attr)
     return _impl
 
 def _expand_dims():
@@ -341,7 +346,7 @@ def _matmul():
     def _impl(inputs, attr, params):
         channels = _infer_channels(inputs[1], params, not attr['transpose_b'])
         if attr['transpose_a']:
-            inputs[0] = _sym.transpose(inputs[0], axes(1, 0))
+            inputs[0] = _sym.transpose(inputs[0], axes=(1, 0))
         if not attr['transpose_b']:
             inputs[1] = _sym.transpose(inputs[1], axes=(1, 0))
         return AttrCvt(op_name="dense",
@@ -379,7 +384,7 @@ def _pack():
     def _impl(inputs, attr, params):
         axis = int(attr["axis"])
         inputs_reshaped = [_sym.expand_dims(i, axis=axis, num_newaxis=1) for i in inputs]
-        return _sym.concatenate(*inputs_reshaped, axis=axis)
+        return _sym.concatenate(*inputs_reshaped, axis=axis, name=attr["_node_name"])
 
     return _impl
 
@@ -395,9 +400,19 @@ def _reshape():
                 extras={'shape':tuple(shape_arg.asnumpy())},
                 ignores=['Tshape'])(inputs, attr)
         except KeyError:
-            return AttrCvt(
-                op_name="reshape_like",
-                ignores=['Tshape'])(inputs, attr)
+            # Shape operator is already pruned, hence
+            # try to infer shape by precompute prune if possible.
+            if all(in_node in params for in_node in inputs[1].list_input_names()):
+                graph = _graph.create(_sym.Group(inputs[1]))
+                params_pre = {k: params[k] for k in inputs[1].list_input_names()}
+                params_new = build_module._run_graph(graph, params_pre)
+                inputs.pop(1)
+                return AttrCvt(
+                    op_name="reshape",
+                    extras={'shape':tuple(params_new[0].asnumpy().flatten())},
+                    ignores=['Tshape'])(inputs, attr)
+            else:
+                raise RuntimeError("Reshape with dynamic shape input not supported yet.")
     return _impl
 
 def _bias_add():
@@ -469,9 +484,7 @@ def _relu6():
 
 def _shape():
     def _impl(inputs, attr, params):
-        # Result of this operator is prominently used by reshape operator.
-        # Just pass the input as it is so that reshape_like can be used there.
-        return inputs[0]
+        return np.array(attr['_input_shapes'][inputs[0]][0], dtype='int32')
     return _impl
 
 def _fill():
@@ -560,6 +573,7 @@ def _stridedSlice():
             m_begin = [0] * data_dim
             m_end = [0] * data_dim
             m_stride = [0] * data_dim
+            fshape_indices = []
             #Count new axis after ellipsis_mask, consider while applying ellipsis_mask.
             ellipsis_seen = False
             new_axes_after_ellipsis = 0
@@ -584,7 +598,10 @@ def _stridedSlice():
                         m_begin[final_index] = 0
                         m_end[final_index] = data_shape[0][final_index]
                         m_stride[final_index] = 1
+                        fshape_indices.append(final_index)
                         final_index += 1
+                elif mask &new_axis_mask:
+                    fshape_indices.append(-1)
                 elif not mask & new_axis_mask:
                     if final_index == len(m_begin):
                         break
@@ -605,28 +622,30 @@ def _stridedSlice():
                                                  if begin[index] < 0 else begin[index]
                         m_end[final_index] = begin[index] + 1
                         m_stride[final_index] = 1
-                    final_index += 1
-            return m_begin, m_end, m_stride
+                        fshape_indices.append(-2)
+                    else:
+                        fshape_indices.append(final_index)
 
+                    final_index += 1
+            return m_begin, m_end, m_stride, fshape_indices
+
+        fshape_indices = None
         if begin_mask or end_mask or ellipsis_mask or new_axis_mask or shrink_axis_mask:
-            begin, end, stride = _transform_mask(stride_dim, ellipsis_mask)
+            begin, end, stride, fshape_indices = _transform_mask(stride_dim, ellipsis_mask)
         out = _sym.strided_slice(inputs[0], begin=begin, end=end, stride=stride)
         out_shape = _infer_out_shapes(out, params)[0]
+        if not fshape_indices:
+            fshape_indices = range(len(out_shape))
 
         #Create final output shape.
         final_output = []
-        out_index = 0
-        index = 0
-        while out_index != len(out_shape):
-            #axis with shrink_axis_mask dimension=1 and it is ignored.
-            mask = 1 << index
-            if (new_axis_mask & mask) and not ellipsis_mask & mask:
+        for gather_index in fshape_indices:
+            if gather_index == -1:
                 final_output.append(1)
-            elif (not mask & shrink_axis_mask) or index >= stride_dim:
-                #Shrink is considered till stride_dim
-                final_output.append(out_shape[out_index])
-                out_index += 1
-            index += 1
+            elif gather_index == -2:
+                pass
+            else:
+                final_output.append(out_shape[gather_index])
         return _sym.reshape(out, shape=tuple(final_output))
     return _impl
 
@@ -768,6 +787,15 @@ def _broadcast(name):
         )(inputs, attr)
     return _impl
 
+def _split():
+    def _impl(inputs, attr, params):
+        axis = params.pop(inputs[0].list_output_names()[0])
+        return AttrCvt(
+            op_name="split", ignores=['T'],
+            transforms={'num_split': 'indices_or_sections'},
+            extras={'axis': axis.asnumpy()[0]})(inputs[1], attr)
+    return _impl
+
 # compatible operators that do NOT require any conversion.
 _identity_list = []
 
@@ -798,6 +826,7 @@ _convert_map = {
     'Add'                               : _elemwise('add'),
     'Sub'                               : _elemwise('sub'),
     'Mul'                               : _elemwise('mul'),
+    'RealDiv'                           : _elemwise('div'),
     'Maximum'                           : _elemwise('max'),
     'Minimum'                           : _elemwise('min'),
     'Sum'                               : _sum(),
@@ -834,6 +863,7 @@ _convert_map = {
     'GreaterEqual'                      : _broadcast('greater_equal'),
     'Equal'                             : _broadcast('equal'),
     'NotEqual'                          : _broadcast('not_equal'),
+    'Split'                             : _split(),
 }
 
 # _convert_map_rnn defines maps of rnn operator name to
@@ -1030,27 +1060,32 @@ class GraphProto(object):
         self._num_param = 0
         self._num_rnn_layer = False
 
-    def from_tensorflow(self, graph, layout="NHWC"):
+    def from_tensorflow(self, graph, layout="NHWC", shape=None, outputs=None):
         """Construct nnvm nodes from tensorflow  graph definition - GraphDef.
 
         Follow the tensorflow graph definition to parse and convert it to NNVM.
         Some of the assumptions listed below.
 
-            -> First Placeholder or Const node will be considered as graph input.
-            -> Rest all Const nodes are params.
+            -> All Placeholders are considered as graph input.
+            -> All Const nodes are params.
             -> Last node is assumed as graph output.
-            -> _output_shapes : Attribute should present in the tenserflow forzen graph.
+            -> _output_shapes : Graph should be frozen with add_shapes=True.
+                                Or user can pass input shape dictionaly optionally.
             -> DecodeJpeg, ResizeBilinear: These are dummy operators.
                                            Hence user should handle preprocessing outside.
             -> CheckNumerics: No implementation as of now for this.
                               Just copies input to output.
 
-        TODO: Change algorithm to stop treating first 'Const' in a special way.
-
         Parameters
         ----------
         graph : tensorflow graph definition object
             The loaded tensorflow GraphDef
+
+        layout : target layout to be used (Optional)
+            NCHW only supported now to enable NHWC models on GPU.
+
+        shape : Dictionary of input dimensions (Optional)
+            Graph level input shape dictionary.
 
         Returns
         -------
@@ -1072,13 +1107,13 @@ class GraphProto(object):
             raise NotImplementedError( \
                 "The following operators are not implemented: {}".format(missing_operators))
 
+        final_op = None
         # Parse the nodes to re-create TF graph using Symbol API of NNVM
         for node in graph.node:
             # Tensorflow doesn't have seperate list for params extraction.
             # Operator name 'Const' is treated as a parameter to build NNVM params dict.
 
             input_shapes = {}
-
             attr = self._parse_attr(node.attr)
 
             #Variable converted to Const will not have only value attr
@@ -1091,6 +1126,10 @@ class GraphProto(object):
                 self._output_shapes[node.name] = \
                     [tensor_util.TensorShapeProtoToList(shape) \
                     for shape in attr['_output_shapes']]
+            elif shape:
+                # Keep the list indexable to avoid key error.
+                # Actual value will be filled after node creation.
+                self._output_shapes[node.name] = [None]
             else:
                 raise NotImplementedError( \
                     "Please freeze the graph with add_shapes=True")
@@ -1099,7 +1138,6 @@ class GraphProto(object):
                 self._nodes[node.name] = _sym.Variable(name=node.name,
                                                        shape=self._output_shapes[node.name][0])
 
-                #input_shapes[self._nodes[node.name]] = self._output_shapes[node.name]
             elif node.op == "Const":
                 # All Const nodes are Param nodes, lets parse
                 self._num_param += 1
@@ -1121,39 +1159,60 @@ class GraphProto(object):
                 # Pass the target layout
                 attr["_target_layout"] = layout
 
-                #ToDo: Some of the tensorflow operators internaly maintain
-                #execution layers and its output name will the layer number along with
-                #graph node name.eg: Node name:- 'Model/RNN/cell_0/RnnCell', but the
-                #output name will be 'Model/RNN/cell_0/RnnCell:0'. In this case,
-                #the digit has to be ignored.
-                if ":" in node.input[0]:
-                    in_name, _ = node.input[0].split(':')
-                    node.input[0] = in_name
-
                 # Fill shapes for all inputs in a list
-                try:
-                    inputs = [self._nodes[i] for i in node.input]
-                    for i in node.input:
-                        input_shapes[self._nodes[i]] = self._output_shapes[i]
-                    attr['_input_shapes'] = input_shapes
-                except KeyError:
-                    # TODO: Need to find clean way to handle '^CheckNumerics'
-                    pass
+                inputs = []
+                for i in node.input:
+                    #ToDo: Some of the tensorflow operators internaly maintain
+                    #execution layers and its output name will the layer number along with
+                    #graph node name.eg: Node name:- 'Model/RNN/cell_0/RnnCell', but the
+                    #output name will be 'Model/RNN/cell_0/RnnCell:0'. In this case,
+                    #the digit has to be ignored.
+                    tensor_name = i.split(':')
+                    node_name = tensor_name[0]
+                    if node_name in self._nodes:
+                        in_sym = self._nodes[node_name]
+                        if len(in_sym.list_output_names()) > 1:
+                            tensor_slot = int(tensor_name[1]) if len(tensor_name) > 1 else 0
+                            in_sym = in_sym[tensor_slot]
+                            input_shape = (self._output_shapes[node_name])[tensor_slot]
+                        else:
+                            input_shape = self._output_shapes[node_name][0]
+                        inputs.append(in_sym)
+                        input_shapes[in_sym] = [input_shape]
+                attr['_input_shapes'] = input_shapes
 
                 inputs = self._fix_extranodes(node.op, attr, inputs)
-
                 op = self._convert_operator(node.op, inputs, attr, graph)
+
+                # Check is op is converted to param
+                if isinstance(op, np.ndarray):
+                    self._params[node.name] = tvm.nd.array(op)
+                    op = _sym.Variable(name=node.name,
+                                       shape=self._params[node.name].shape)
+
                 # Assuming only one output.
                 self._nodes[node.name] = op
-                node_output = op
+                final_op = op
 
-        # Assume the final node is the output node
-        out = node_output
+            # Infer shapes if passed explicitely
+            node_output = self._nodes[node.name]
+            if shape:
+                g = _graph.create(node_output)
+                shape_dict = {k: v.shape for k, v in self._params.items()}
+                shape_dict.update(shape)
+                _, out_shapes = graph_util.infer_shape(g, **shape_dict)
+                self._output_shapes[node.name] = out_shapes
+
+        out = []
+        if outputs is None:
+            out.append(final_op)
+        else:
+            out = [self._nodes[out_name] for out_name in outputs]
 
         #Add the RNN outputs also with 'head' nodes of the nnvm graph
         if self._num_rnn_layer:
             out_rnn = _sym.concatenate(*self._out_rnn, axis=0)
-            out = [out, out_rnn]
+            out.append(out_rnn)
 
         if isinstance(out, list):
             out = _sym.Group(out)
@@ -1241,9 +1300,9 @@ class GraphProto(object):
             for f in fields:
                 if getattr(x.list, f):
                     if f == "type":
-                        ret = [dtypes.as_dtype(x) for x in list(getattr(x.list, f))]
+                        ret += [dtypes.as_dtype(x) for x in list(getattr(x.list, f))]
                     else:
-                        ret = list(getattr(x.list, f))
+                        ret += list(getattr(x.list, f))
         else:
             for f in fields:
                 if x.HasField(f):
@@ -1350,7 +1409,7 @@ class GraphProto(object):
 
         return inputs
 
-def from_tensorflow(graph, layout="NHWC"):
+def from_tensorflow(graph, layout="NHWC", shape=None, outputs=None):
     """  Load tensorflow graph which is a python tensorflow graph object into nnvm graph.
     The companion parameters will be handled automatically.
 
@@ -1368,5 +1427,5 @@ def from_tensorflow(graph, layout="NHWC"):
         Dict of converted parameters stored in tvm.ndarray format
     """
     g = GraphProto()
-    sym, params = g.from_tensorflow(graph, layout)
+    sym, params = g.from_tensorflow(graph, layout, shape, outputs)
     return sym, params

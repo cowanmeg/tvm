@@ -154,6 +154,12 @@ def gemv_impl():
 # The importing needs to happen before the tensorized GEMV being executed.
 #
 s[C].pragma(x, "import_llvm", gemv_impl())
+print(tvm.lower(s, [A, B, C], simple_mode=True))
+
+######################################################################
+# Finally we compare the tensorize version with that :code:`numpy.dot` produces,
+# ensure our implementation is correct.
+#
 func = tvm.build(s, [A, B, C], target="llvm", name="gemv")
 
 from topi.util import get_const_tuple
@@ -163,15 +169,14 @@ a = np.random.uniform(size=get_const_tuple(A.shape)).astype(dtype)
 b = np.random.uniform(size=get_const_tuple(B.shape)).astype(dtype)
 c = tvm.nd.array(np.zeros(get_const_tuple(C.shape), dtype=dtype), ctx)
 func(tvm.nd.array(a, ctx), tvm.nd.array(b, ctx), c)
-np.testing.assert_allclose(c.asnumpy(), np.dot(a, b.T), rtol=1e-3)
+tvm.testing.assert_allclose(c.asnumpy(), np.dot(a, b.T), rtol=1e-3)
 
 ######################################################################
-# We compare the tensorize version with that :code:`numpy.dot` produces,
-# ensure our implementation is correct.
-#
 # Reduce-update for Tensorize
-# ------------------------------------
-# Let's then move one step forward.
+# ---------------------------
+# So far you have learned the basic idea of tensorize,
+# now let's move one step forward to a more complicated case.
+#
 # Assume our accelerator could only multiply a vector by a square matrix,
 # in which the vector size needs to be no larger than 16.
 # Given such hardware constrain, now we need to split the reduce axis as following,
@@ -270,7 +275,7 @@ a = np.random.uniform(size=get_const_tuple(A.shape)).astype(dtype)
 b = np.random.uniform(size=get_const_tuple(B.shape)).astype(dtype)
 c = tvm.nd.array(np.zeros(get_const_tuple(C.shape), dtype=dtype), ctx)
 func(tvm.nd.array(a, ctx), tvm.nd.array(b, ctx), c)
-np.testing.assert_allclose(c.asnumpy(), np.dot(a, b.T), rtol=1e-3)
+tvm.testing.assert_allclose(c.asnumpy(), np.dot(a, b.T), rtol=1e-3)
 
 ######################################################################
 # Summary

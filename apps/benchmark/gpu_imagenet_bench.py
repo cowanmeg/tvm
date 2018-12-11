@@ -2,6 +2,7 @@
 see README.md for the usage and results of this script.
 """
 import argparse
+import threading
 
 import numpy as np
 
@@ -14,6 +15,26 @@ import nnvm.testing
 from util import get_network
 
 
+def benchmark(network, target):
+    net, params, input_shape, output_shape = get_network(network, batch_size=1)
+
+    with nnvm.compiler.build_config(opt_level=3):
+        graph, lib, params = nnvm.compiler.build(
+            net, target=target, shape={'data': input_shape}, params=params, dtype=dtype)
+
+    # create runtime
+    ctx = tvm.context(str(target), 0)
+    module = runtime.create(graph, lib, ctx)
+    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
+    module.set_input('data', data_tvm)
+    module.set_input(**params)
+
+    # evaluate
+    ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=args.repeat)
+    prof_res = np.array(ftimer().results) * 1000  # multiply 1000 for converting to millisecond
+    print("%-20s %-19s (%s)" % (network, "%.2f ms" % np.mean(prof_res), "%.2f ms" % np.std(prof_res)))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--network", type=str, choices=
@@ -22,13 +43,14 @@ if __name__ == "__main__":
                          'mobilenet', 'mobilenet_v2', 'squeezenet_v1.0', 'squeezenet_v1.1'],
                         help='The name of neural network')
     parser.add_argument("--model", type=str,
-                        choices=['1080ti', 'titanx', 'gfx900'], default='1080ti',
+                        choices=['1080ti', 'titanx', 'tx2', 'gfx900'], default='1080ti',
                         help="The model of the test device. If your device is not listed in "
                              "the choices list, pick the most similar one as argument.")
-    parser.add_argument("--number", type=int, default=500)
+    parser.add_argument("--repeat", type=int, default=600)
     parser.add_argument("--target", type=str,
                         choices=['cuda', 'opencl', 'rocm', 'nvptx', 'metal'], default='cuda',
                         help="The tvm compilation target")
+    parser.add_argument("--thread", type=int, default=1, help="The number of threads to be run.")
     args = parser.parse_args()
 
     dtype = 'float32'
@@ -44,20 +66,16 @@ if __name__ == "__main__":
     print("%-20s %-20s" % ("Network Name", "Mean Inference Time (std dev)"))
     print("--------------------------------------------------")
     for network in networks:
-        net, params, input_shape, output_shape = get_network(network, batch_size=1)
+        if args.thread == 1:
+            benchmark(network, target)
+        else:
+            threads = list()
+            for n in range(args.thread):
+                thread = threading.Thread(target=benchmark, args=([network, target]), name="thread%d" % n)
+                threads.append(thread)
 
-        with nnvm.compiler.build_config(opt_level=3):
-            graph, lib, params = nnvm.compiler.build(
-                net, target=target, shape={'data': input_shape}, params=params, dtype=dtype)
+            for thread in threads:
+                thread.start()
 
-        # create runtime
-        ctx = tvm.context(str(target), 0)
-        module = runtime.create(graph, lib, ctx)
-        data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
-        module.set_input('data', data_tvm)
-        module.set_input(**params)
-
-        # evaluate
-        ftimer = module.module.time_evaluator("run", ctx, number=args.number, repeat=3)
-        prof_res = np.array(ftimer().results) * 1000  # multiply 1000 for converting to millisecond
-        print("%-20s %-19s (%s)" % (network, "%.2f ms" % np.mean(prof_res), "%.2f ms" % np.std(prof_res)))
+            for thread in threads:
+                thread.join()

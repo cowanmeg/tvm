@@ -290,13 +290,11 @@ def load_layers(stop_layer=None):
         else:
             print ("\t Didn't handle", layer.name)
 
-        print ("hello", layer.name, stop_layer)
         if stop_layer == layer.name:
             global output_shape
             output_shape = layer.output_shape
             global output_dtype
             output_dtype = 'int16'
-            print (output_shape)
             break
 
     return network
@@ -343,7 +341,6 @@ def run(data, stop_layer=None):
 
     # out = module.debug_get_output('binary_conv2d', tvm.nd.empty(output_shape, output_dtype, ctx=ctx)).asnumpy()
     out =  module.get_output(0, tvm.nd.empty(output_shape, output_dtype, ctx=ctx)).asnumpy()
-    print (out)
     return out
 
 def get_network():

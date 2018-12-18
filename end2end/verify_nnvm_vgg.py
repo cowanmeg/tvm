@@ -295,7 +295,10 @@ def load_layers(stop_layer=None):
             global output_shape
             output_shape = layer.output_shape
             global output_dtype
-            output_dtype = 'int16'
+            if 'scalu' in stop_layer or 'conv2d' == stop_layer:
+                out_dtype = 'float32'
+            else:
+                output_dtype = 'int16'
             break
 
     return network

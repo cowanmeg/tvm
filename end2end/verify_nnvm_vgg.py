@@ -379,8 +379,9 @@ def build_network(stop_layer=None):
 
 
 if __name__ == '__main__':
-    data_tvm, data_tf = load_test_image()
-    run(data_tvm, 'binary_conv2d')
+    with graph.as_default():
+        data_tvm, data_tf = load_test_image()
+        run(data_tvm, 'binary_conv2d')
 
    
 

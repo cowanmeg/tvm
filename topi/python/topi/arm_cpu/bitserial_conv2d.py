@@ -86,8 +86,8 @@ def _get_schedule_bitserial_conv2d(wkl, layout):
 #     return ('bitserial_conv2d', ) + autotvm.task.args_to_workload(
 #         [data, kernel, stride, padding, activation_bits, weight_bits, out_dtype])
 
-def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, bitpack=True):
-    if bitpack:
+def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
+    if use_bitpack:
         kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
     else:
         kernel_q = kernel

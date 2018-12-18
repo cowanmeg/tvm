@@ -34,6 +34,21 @@ tuning_option = {
     ),
 }
 
+def get_padding(padding, kernel_h, kernel_w):
+    if padding is 'VALID':
+        pad_h = 0 
+        pad_w = 0
+    elif padding is 'SAME':
+        pad_h = kernel_h - 1
+        pad_w = kernel_w - 1
+    else: # Padding given as tuple
+        return padding
+    pad_top = int(np.ceil(float(pad_h) / 2))
+    pad_bottom = pad_h - pad_top
+    pad_left = int(np.ceil(float(pad_w) / 2))
+    pad_right = pad_w - pad_left
+    return (pad_top, pad_left, pad_bottom, pad_right)
+
 def generate_quantized_np(shape, bits, out_dtype):
     np.random.seed(0)
     min_val = 0
@@ -90,12 +105,12 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
 def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel, stride, padding,
                         activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa):
     in_height = in_width = in_size
-
+    pad = get_padding(padding, kernel, kernel)
     with autotvm.apply_history_best(log_file):
         with tvm.target.arm_cpu("rasp3b"):
             A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=in_dtype, name='A')
             W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=in_dtype, name='W')
-            B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, padding, activation_bits, weight_bits,
+            B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, pad, activation_bits, weight_bits,
                                 pack_dtype, out_dtype, dorefa)
             s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
@@ -181,6 +196,7 @@ def tune_tasks(tsk,
 def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, padding,
                         activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, layout, trials):
     in_height = in_width = in_size
+    pad = get_padding(padding, kernel, kernel)
     with tvm.target.arm_cpu("rasp3b"):
         if layout == 'nchw':
             A = tvm.placeholder((batch, in_channel, in_height, in_width), dtype=in_dtype, name='A')
@@ -188,9 +204,9 @@ def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, pa
         elif layout == 'nhwc':
             A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=in_dtype, name='A')
             W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=in_dtype, name='W')
-        args = [A, W, stride, padding, activation_bits, weight_bits, pack_dtype, out_dtype, dorefa]
+        args = [A, W, stride, pad, activation_bits, weight_bits, pack_dtype, out_dtype, dorefa]
         args = serialize_args(args)
-        task = autotvm.task.create("topi_arm_cpu_bitserial_conv_" + layout,
+        task = autotvm.task.create("topi_nn_bitserial_conv2d_" + layout,
                        args=args, target=target, template_key='direct')
     # run tuning tasks
     print (task.config_space)
@@ -198,12 +214,7 @@ def tune_and_evaluate(batch, in_size, in_channel, num_filter, kernel, stride, pa
     tune_tasks(task, **tuning_option, n_trial=trials)
 
 
-def test_bitserial_conv2d(trials):
-    in_size = 56
-    ic, oc = 64, 64
-    k = 3
-    stride = 1
-    pad = 1
+def test_bitserial_conv2d(in_size, ic, oc, k, stride, padding, trials):
     activation_bits = 2
     weight_bits = 1
     in_dtype = 'uint8'
@@ -221,10 +232,9 @@ def test_bitserial_conv2d(trials):
 
     pack_dtype = 'uint8'
     # tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, 1, 1, in_dtype, pack_dtype, out_dtype, dorefa, 'nchw')
-    tune_and_evaluate(1, in_size, ic, oc, k, stride, pad, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc', trials)
-    tune_and_evaluate(1, 56, 64, 64, 1, 1, 0, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc', trials)
+    tune_and_evaluate(1, in_size, ic, oc, k, stride, padding, activation_bits, weight_bits, in_dtype, pack_dtype, out_dtype, dorefa, 'nhwc', trials)
 
-    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, padding, 2, 1, in_dtype, pack_dtype, out_dtype, dorefa)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
     # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 
@@ -233,4 +243,4 @@ if __name__ == "__main__":
         trials = int(sys.argv[1])
     else:
         trials = DEFAULT_TRIALS
-    test_bitserial_conv2d(trials)
+    test_bitserial_conv2d(56, 64, 64, 3, 1, 'SAME', trials)

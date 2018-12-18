@@ -5,6 +5,21 @@ import topi.testing
 from topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
 
+def get_padding(padding, kernel_h, kernel_w):
+    if padding is 'VALID':
+        pad_h = 0 
+        pad_w = 0
+    elif padding is 'SAME':
+        pad_h = kernel_h - 1
+        pad_w = kernel_w - 1
+    else: # Padding given as tuple
+        return padding
+    pad_top = int(np.ceil(float(pad_h) / 2))
+    pad_bottom = pad_h - pad_top
+    pad_left = int(np.ceil(float(pad_w) / 2))
+    pad_right = pad_w - pad_left
+    return (pad_top, pad_left, pad_bottom, pad_right)
+
 def generate_quantized_np(shape, bits, out_dtype):
     min_val = 0
     max_val = 1 << bits
@@ -16,11 +31,11 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
     input_type = 'uint32'
     out_dtype = 'int32'
     pack_dtype = 'uint32'
-
+    pad = get_padding(padding, kernel, kernel)
     with tvm.target.create('llvm'):
         A = tvm.placeholder((batch, in_channel, in_height, in_width), dtype=input_type, name='A')
         W = tvm.placeholder((num_filter, in_channel, kernel, kernel), dtype=input_type, name='W')
-        B = topi.nn.bitserial_conv2d_nchw(A, W, stride, padding, activation_bits, weight_bits, 
+        B = topi.nn.bitserial_conv2d_nchw(A, W, stride, pad, activation_bits, weight_bits, 
                                      pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
         s = topi.generic.schedule_bitserial_conv2d_nchw([B])
 
@@ -55,11 +70,11 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     input_type='uint32'
     out_dtype='int32'
     pack_dtype='uint32'
-
+    pad = get_padding(padding, kernel, kernel)
     with tvm.target.create('llvm'):
         A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=input_type, name='A')
         W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=input_type, name='W')
-        B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, padding, activation_bits, weight_bits, 
+        B = topi.nn.bitserial_conv2d_nhwc(A, W, stride, pad, activation_bits, weight_bits, 
                                     pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
         s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
@@ -89,12 +104,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     func(a, w, b)
     tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
 
-def test_bitserial_conv2d():
-    in_size = 56
-    ic, oc = 64, 64
-    k = 3
-    stride = 1
-    pad = 1
+def test_bitserial_conv2d(in_size, ic, oc, k, stride, pad):
     verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, True)
     verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 2, 1, True)
     verify_bitserial_conv2d_nchw(1, in_size, ic, oc, k, stride, pad, 1, 1, False)
@@ -108,4 +118,5 @@ def test_bitserial_conv2d():
     verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 2, False)
 
 if __name__ == "__main__":
-    test_bitserial_conv2d()
+    # test_bitserial_conv2d(56, 64, 64, 3, 1, (1, 1, 1, 1))
+    test_bitserial_conv2d(56, 64, 64, 3, 1, 'SAME')

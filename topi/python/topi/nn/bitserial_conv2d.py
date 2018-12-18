@@ -192,7 +192,7 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
     rx = tvm.reduce_axis((0, kernel_w), name='rx')
     b1 = tvm.reduce_axis((0, activation_bits), name='b1')
     b2 = tvm.reduce_axis((0, weight_bits), name='b2')
-
+    print ("NN bitserial_conv2d outshape", (nn, yy, xx, ff))
     def _conv(nn, yy, xx, ff):
         b1b2 = (b1+b2).astype(out_dtype)
         return tvm.sum((tvm.popcount(
@@ -361,12 +361,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
 
     if pack_kernel:
         kernel_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
-        KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
     else:
-        kernel_vec = kernel
-        OCO, KH, KW, _, VC, KB = get_const_tuple(kernel_q.shape)
-        CO = OCO * VC
+        kernel_q = kernel
 
+    KH, KW, _, CO, KB = get_const_tuple(kernel_q.shape)
     N, H, W, CI, IB = get_const_tuple(data_q.shape)
     TPAD, LPAD, DPAD, RPAD = padding
 
@@ -421,9 +419,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, ci, b: \
         data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][ci][b], name='data_vec')
 
-    if pack_kernel:
-        kernel_vec = tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
-            kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
+    kernel_vec = tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
+        kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
 
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')

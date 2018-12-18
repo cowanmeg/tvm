@@ -169,7 +169,7 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
                  dshape[3] / 8,
                  param.channels});
 
-  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape_packed);
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape);
   if (param.use_bias) {
     static const Layout default_bias_layout("C");
     TShape bias_shape({param.channels});

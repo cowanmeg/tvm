@@ -34,23 +34,24 @@ use_maxpool = False
 pure_shiftnorm = False
 config = Config(actQ=actQ, weightQ=weightQ, bits=bits, use_act=use_act, use_bn=use_bn, 
                 use_maxpool=use_maxpool, pure_shiftnorm=pure_shiftnorm)
+graph = tf.Graph()
+with graph.as_default():
+    with config:
+        model = vgg11(classes=1000)
 
-with config:
-    model = vgg11(classes=1000)
+    test_data = tf.keras.layers.Input(shape=[224, 224, 3], batch_size = 1)
+    out_tensor = model(test_data, training=False)
+    sess = tf.Session()
+    with sess.as_default():
+        saver = tf.train.Saver()
+        saver.restore(sess, '/shared/jwfromm/models/vgg11_binary_a2_w1_shiftnorm_scalu/model.ckpt-141946') # imagenet
+        input_shape = (1, 224, 224, 3)
+        output_shape = (1, 1000)
 
-test_data = tf.keras.layers.Input(shape=[224, 224, 3], batch_size = 1)
-out_tensor = model(test_data, training=False)
-sess = tf.Session()
-with sess.as_default():
-    saver = tf.train.Saver()
-    saver.restore(sess, '/shared/jwfromm/models/vgg11_binary_a2_w1_shiftnorm_scalu/model.ckpt-141946') # imagenet
-    input_shape = (1, 224, 224, 3)
-    output_shape = (1, 1000)
-
-    # saver.restore(sess, '/shared/jwfromm/vgg_dorefa_shiftnorm_scalu/model.ckpt-60000') # cifar10
-    # input_shape = (1, 32, 32, 3)
-    # output_shape = (1, 10)
-# model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
+        # saver.restore(sess, '/shared/jwfromm/vgg_dorefa_shiftnorm_scalu/model.ckpt-60000') # cifar10
+        # input_shape = (1, 32, 32, 3)
+        # output_shape = (1, 10)
+    # model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
 
 RASP = True
 REPEATS = 20
@@ -375,8 +376,9 @@ def build_network(stop_layer=None):
 
 
 if __name__ == '__main__':
-    data_tvm, data_tf = load_test_image()
-    run(data_tvm, 'binary_conv2d')
+    with graph.as_default():
+        data_tvm, data_tf = load_test_image()
+        run(data_tvm, 'binary_conv2d')
 
    
 

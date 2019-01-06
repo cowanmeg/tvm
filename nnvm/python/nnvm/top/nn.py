@@ -104,6 +104,7 @@ def compute_conv2d(attrs, inputs, _):
         # Temporary band-aid to get rasp working and make it use conv NHWC
         out = topi.nn.conv2d_nhwc(inputs[0], inputs[1], strides, padding, dilation, out_dtype)
     elif groups == 1:
+        print ("Calling this topi conv2d")
         out = topi.nn.conv2d(
             inputs[0], inputs[1], strides, padding, dilation, layout, out_dtype=out_dtype)
     elif layout == "NCHW" and \
@@ -385,7 +386,6 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
-    #in_type = attrs["in_type"]
     assert layout == "NCHW" or layout == "NHWC"
     if layout == 'NHWC':
         out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)

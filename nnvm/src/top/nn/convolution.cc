@@ -100,10 +100,10 @@ inline bool Conv2DInferShape(const nnvm::NodeAttrs& attrs,
   dim_t dilated_ksize_x = 1 + (param.kernel_size[1] - 1) * param.dilation[1];
   TShape oshape({dshape[0], param.channels, 0, 0});
   if (dshape[2] != 0) {
-    oshape[2] = (dshape[2] + param.padding[0] * 2 - dilated_ksize_y) / param.strides[0] + 1;
+    oshape[2] = (dshape[2] + param.padding[0] + param.padding[2] - dilated_ksize_y) / param.strides[0] + 1;
   }
   if (dshape[3] != 0) {
-    oshape[3] = (dshape[3] + param.padding[1] * 2 - dilated_ksize_x) / param.strides[1] + 1;
+    oshape[3] = (dshape[3] + param.padding[1] + param.padding[3] - dilated_ksize_x) / param.strides[1] + 1;
   }
   NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, ConvertLayout(oshape, kNCHW, out_layout));
   // Perform incomplete shape inference. Fill in the missing values in data shape.
@@ -112,10 +112,10 @@ inline bool Conv2DInferShape(const nnvm::NodeAttrs& attrs,
   oshape = ConvertLayout((*out_shape)[0], out_layout, kNCHW);
   dshape[0] = oshape[0];
   if (oshape[2] && param.strides[0] == 1) {
-    dshape[2] = oshape[2] + dilated_ksize_y - 1 - 2 * param.padding[0];
+    dshape[2] = oshape[2] + dilated_ksize_y - 1 - param.padding[0] + param.padding[2];
   }
   if (oshape[3] && param.strides[1] == 1) {
-    dshape[3] = oshape[3] + dilated_ksize_x - 1 - 2 * param.padding[1];
+    dshape[3] = oshape[3] + dilated_ksize_x - 1 - param.padding[1] + param.padding[3];
   }
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kData,
                           ConvertLayout(dshape, kNCHW, in_layout));
@@ -163,7 +163,7 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
                  dshape[3],
                  param.channels});
 
-   TShape wshape_packed({param.kernel_size[0],
+  TShape wshape_packed({param.kernel_size[0],
                  param.kernel_size[1],
                  param.weight_bits,
                  dshape[3] / 8,

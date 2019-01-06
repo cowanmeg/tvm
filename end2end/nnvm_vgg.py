@@ -49,9 +49,11 @@ with sess.as_default():
     # output_shape = (1, 10)
 # model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
 
-RASP = True
+# tvm configurations
+RASP = False
 REPEATS = 20
 opt_level = 3
+bitpack_weights = False
 
 abits = 2
 wbits = 1
@@ -97,19 +99,23 @@ def load_parameter():
             weights = np.copy(bp_weights)
             for x in np.nditer(weights, op_flags=['readwrite']):
                 x[...] = 1 if x == 1 else 0
-            # Bitpack weights
-            ctx = tvm.cpu(0)
-            A = tvm.placeholder(weights.shape, dtype='int16')
-            B = bitpack(A, wbits, kernel_pack_axis, kernel_bit_axis, kernel_pack_dtype)
-            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
-            s = tvm.create_schedule(B.op)
-            func = tvm.build(s, [A, B], "llvm")
-            weights_tvm = tvm.nd.array(weights, ctx)
-            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
-            func(weights_tvm, weights_bitpacked)
             key = layer.name + '_weight'
-            params[key] = weights_bitpacked.asnumpy()
-            dtypes[key] = kernel_pack_dtype
+            if bitpack_weights:
+                ctx = tvm.cpu(0)
+                A = tvm.placeholder(weights.shape, dtype='int16')
+                B = bitpack(A, wbits, kernel_pack_axis, kernel_bit_axis, kernel_pack_dtype)
+                weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+                s = tvm.create_schedule(B.op)
+                func = tvm.build(s, [A, B], "llvm")
+                weights_tvm = tvm.nd.array(weights, ctx)
+                weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+                func(weights_tvm, weights_bitpacked)
+                params[key] = weights_bitpacked.asnumpy()
+                dtypes[key] = kernel_pack_dtype
+            else:
+                params[key] = weights
+                dtypes[key] = 'int16'
+
         elif 'conv2d' in layer.name:
             weights_hwio = layer.weights[0]
             # weights_oihw =  tf.transpose(layer.weights[0], [3, 2, 0, 1])
@@ -169,19 +175,22 @@ def load_parameter():
             weights = np.copy(bp_weights)
             for x in np.nditer(weights, op_flags=['readwrite']):
                 x[...] = 1 if x == 1 else 0
-             # Bitpack weights
-            ctx = tvm.cpu(0)
-            A = tvm.placeholder(weights.shape, dtype='int16')
-            B = bitpack(A, wbits, 1, 1, kernel_pack_dtype)
-            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
-            s = tvm.create_schedule(B.op)
-            func = tvm.build(s, [A, B], "llvm")
-            weights_tvm = tvm.nd.array(weights, ctx)
-            weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
-            func(weights_tvm, weights_bitpacked)
             key = layer.name + '_weight'
-            params[key] = weights_bitpacked.asnumpy()
-            dtypes[key] = kernel_pack_dtype
+            if bitpack_weights:
+                ctx = tvm.cpu(0)
+                A = tvm.placeholder(weights.shape, dtype='int16')
+                B = bitpack(A, wbits, 1, 1, kernel_pack_dtype)
+                weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+                s = tvm.create_schedule(B.op)
+                func = tvm.build(s, [A, B], "llvm")
+                weights_tvm = tvm.nd.array(weights, ctx)
+                weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+                func(weights_tvm, weights_bitpacked)
+                params[key] = weights_bitpacked.asnumpy()
+                dtypes[key] = kernel_pack_dtype
+            else:
+                params[key] = weights
+                dtypes[key] = 'int16'
 
         elif 'batch_normalization' in layer.name:
             gamma, beta, moving_mean, moving_var = get_numpy(sess, layer.weights)

@@ -180,6 +180,7 @@ def load_parameter(stop_layer):
             key = layer.name + 'clip_a_max'
             params[key] = threshold
             dtypes[key] = 'int16'
+            print (threshold, zeros)
 
             # Map -1 weights to 0
             bp_weights = weights.astype('int16').transpose()
@@ -225,11 +226,6 @@ def load_parameter(stop_layer):
     return params, dtypes
 
 def load_layers(stop_layer=None):
-    def remove_prefix(text, prefix):
-        if text.startswith(prefix):
-            return text[len(prefix):]
-        return text 
-
     network = sym.Variable(name="data")
 
     # Load in trained parameters
@@ -277,10 +273,17 @@ def load_layers(stop_layer=None):
             network = sym.bitserial_dense(data=network, units=layer.units, activation_bits=abits, weight_bits=wbits,
                 pack_dtype='uint8', out_dtype='int16', name=layer.name)
 
+            # shift norm
+            r = sym.Variable(layer.name + 'round', shape=layer.output_shape)
+            network = network + r
+            # TODO: temp to get this working
+            network = sym.clip_channelwise(network, axis=0, name=layer.name+'clip')
+            network = sym.right_shift_channelwise(network, axis=0, name=layer.name+'shift')
+
         elif 'scale' in layer.name:
             network = network * layer.scale
             # Quantize
-            network = sym.clip(data=network, a_min = 0.0, a_max = 1.0)
+            network = sym.clip(data=network, a_min=0.0, a_max=1.0)
             data = network * ((1 << abits) - 1) + 0.5
             network = sym.cast(data=data, dtype='int16')
 

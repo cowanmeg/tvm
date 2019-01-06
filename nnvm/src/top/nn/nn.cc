@@ -906,7 +906,7 @@ inline bool RightShiftChannelwiseInferShape(const nnvm::NodeAttrs &attrs,
 }
 
 NNVM_REGISTER_OP(right_shift_channelwise)
-.describe(R"code(clip with thresholds specified per channel
+.describe(R"code(right shift with thresholds specified per channel
 
 )code" NNVM_ADD_FILELINE)
 .add_argument("data", "Tensor", "Input data.")

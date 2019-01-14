@@ -17,35 +17,6 @@ from tvm.autotvm.task.nnvm_integration import deserialize_args
 RaspSpatialPack = namedtuple('SpatialPack',
                              ['vh', 'vw', 'vc', 'ba', 'bc', 'split_ci', 'kfactor'])
 
-# _QUANTIZED_SCHEDULES_NHWC = [
-#     RaspSpatialPack(2, 2, 8, 1, 1, False, 8),
-#     RaspSpatialPack(1, 4, 8, 4, 1, False, 8),
-#     RaspSpatialPack(1, 4, 8, 1, 16, False, 8),
-#     RaspSpatialPack(1, 4, 8, 4, 8, False, 8),
-#     RaspSpatialPack(1, 7, 8, 3, 8, False, 16),
-#     RaspSpatialPack(1, 2, 8, 1, 8, False, 16),
-#     RaspSpatialPack(2, 1, 8, 1, 4, False, 16),
-#     RaspSpatialPack(1, 7, 8, 1, 1, True, 16),
-#     RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
-#     RaspSpatialPack(1, 1, 8, 1, 8, True, 16),
-#     RaspSpatialPack(1, 1, 8, 1, 16, True, 16),
-# ]
-
-# _QUANTIZED_SCHEDULES_NCHW = [
-#     # resnet
-#     SpatialPackNCHW(2, 2, 8, 1, 1),
-#     SpatialPackNCHW(1, 4, 8, 4, 1),
-#     SpatialPackNCHW(1, 4, 8, 1, 16),
-#     SpatialPackNCHW(1, 4, 8, 4, 8),
-#     SpatialPackNCHW(1, 7, 8, 3, 8),
-#     SpatialPackNCHW(1, 2, 8, 1, 8),
-#     SpatialPackNCHW(2, 1, 8, 1, 4),
-#     SpatialPackNCHW(1, 7, 8, 1, 1),
-#     SpatialPackNCHW(1, 1, 8, 1, 16),
-#     SpatialPackNCHW(1, 1, 8, 1, 8),
-#     SpatialPackNCHW(1, 1, 8, 1, 16),
-# ]
-
 @autotvm.task.register("topi_nn_bitserial_conv2d_nhwc")
 def _topi_bitserial_conv2d(*args, **kwargs):
     args = deserialize_args(args)
@@ -66,26 +37,6 @@ def _get_schedule_bitserial_conv2d(wkl, layout):
         sch = _QUANTIZED_SCHEDULES_NHWC[idx]
     return sch
 
-
-# @bitserial_conv2d_nhwc.register("arm_cpu")
-# def bitserial_conv2d_arm_cpu_arg_to_workload(data, kernel, stride, padding, activation_bits, weight_bits,
-#                      pack_dtype=None, out_dtype=None, dorefa=False):
-#     if out_dtype is None:
-#         out_dtype = data.dtype
-#     assert data.shape[0].value == 1, "only support batch size=1 convolution on rasp"
-#     assert layout == "NCHW" or layout == "NHWC", "only support layouts NCHW and NHWC"
-#     if dorefa:
-#         assert layout == "NCHW", "Cannot support dorea with NHWC layout yet"
-#     wkl = _get_workload(data, kernel, stride, padding, out_dtype, layout)
-#     # sch = _get_schedule(wkl, layout)
-#     if layout == "NCHW":
-#         return spatial_pack_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
-#                                  pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
-#     #return spatial_pack_nhwc(data, kernel, stride, padding, activation_bits,
-#                               #weight_bits, out_dtype)
-#     return ('bitserial_conv2d', ) + autotvm.task.args_to_workload(
-#         [data, kernel, stride, padding, activation_bits, weight_bits, out_dtype])
-
 def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     if use_bitpack:
         kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
@@ -96,15 +47,14 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
-# TODO: support kernel prepacking
+# TODO: pad IC of weights!!
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits, 
                       pack_dtype, out_dtype, dorefa, shift=None):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into 8 bits"
-    # wkl = _get_workload(data, kernel, stride, padding, out_dtype, "NHWC")
-    # sch = _get_schedule(wkl, "NHWC")
+
     
     N, H, W, CI = get_const_tuple(data.shape)
     if len(kernel.shape) == 4:
@@ -127,6 +77,15 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     OH = (PAD_H - KH) // HSTR + 1
     OW = (PAD_W - KW) // WSTR + 1
     oshape = (1, OH, OW, CO)
+
+    # Pad input channels of weights and data when it is not a multiple of 8
+    if CI_packed % 8 != 0:
+        CI_PAD = CI_packed % 8
+        CI_packed += CI_PAD
+    else:
+        CI_PAD = 0
+
+
     # ==================== define configuration space ====================
     n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
     ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
@@ -167,7 +126,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
 
     if (TPAD != 0 and RPAD != 0):
-        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
+        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, CI_PAD), name="data_pad")
+    elif CI_PAD != 0:
+        data_pad = pad(data_q, (0, 0, 0, 0, 0), (0, 0, 0, 0, CI_PAD), name="data_pad")
     else:
         data_pad = data_q
 
@@ -218,11 +179,10 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
         z = tvm.compute((m,), lambda i:
                     tvm.sum(tvm.popcount(w[bw, i, k].astype('uint16') & x[bx, k].astype('uint16'))
                             << (bw+bx).astype('uint16'), axis=[bw, bx, k]), name='z')
-
     Wb = tvm.decl_buffer(w.shape, w.dtype,
                          name="W",
                          offset_factor=k_i,
-                         strides=[tvm.var('ldw'), tvm.var('ldw'), 1])
+                         strides=[tvm.var('ldw'), tvm.var('ldw'), 1]) # stride can be inferred
     Xb = tvm.decl_buffer(x.shape, x.dtype,
                          name="X",
                          offset_factor=k_i,
@@ -250,10 +210,10 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
 
         def _instr(index):
             irb = tvm.ir_builder.create()
-            if index == 1:
+            if index == 1: # reduce reset
                 irb.emit(zz.vstore(0, tvm.const(0, return_dtype)))
                 return irb.get()
-
+            # body and reduce update
             cnts8 = [None] * 8
             cnts4 = [None] * 4
             cnts2 = [None] * 2
@@ -315,36 +275,9 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     KB = get_const_int(KB)
     IB = get_const_int(IB)
 
-    # if data_pad is None:
-    #     padding = (0, 0)
-    #     _, in_h, in_w, _, _ = data_q.shape
-    #     kern_h, kern_w, _, _ = kernel.shape
-    #     _, out_h, out_w, _ = output.shape
-    #     hstride = (in_h - kern_h) // (out_h - 1)
-    #     wstride = (in_w - kern_w) // (out_w - 1)
-    #     stride = get_const_int(hstride), get_const_int(wstride)
-    # else:
-    #     _, in_h, in_w, _, _ = data_q.shape
-    #     _, pad_h, pad_w, _, _ = data_pad.shape
-    #     hpad = (pad_h - in_h) // 2
-    #     wpad = (pad_w - in_w) // 2
-    #     padding = get_const_int(hpad), get_const_int(wpad)
-
-    #     _, in_h, in_w, _, _ = data_pad.shape
-    #     kern_h, kern_w, _, _ = kernel.shape
-    #     _, out_h, out_w, _ = output.shape
-    #     hstride = (in_h - kern_h) // (out_h - 1)
-    #     wstride = (in_w - kern_w) // (out_w - 1)
-    #     stride = get_const_int(hstride), get_const_int(wstride)
-
-    # wkl = _get_workload(data, kernel, stride, padding, output.dtype, "NHWC")
-    # sch = _get_schedule(wkl, "NHWC")
-
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
-    # ba = cfg.ba
-    # bc = cfg.bc
 
     ##### Schedule data packing
     if data_pad is not None:
@@ -382,9 +315,8 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
     
-    vc_len = cfg.axis(vc).length
     kfactor = cfg['tile_ci'].size[1]
-    pc = _intrin_popcount(vc_len, kfactor, KB, IB, dorefa)
+    pc = _intrin_popcount(VC, kfactor, KB, IB, dorefa)
     s[conv_out].tensorize(kb, pc)  
 
     n, h, w, co = s[last].op.axis

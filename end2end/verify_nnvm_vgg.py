@@ -4,18 +4,21 @@ import sys
 import tvm
 import math
 import json
-from tvm.contrib import graph_runtime
 import topi.testing
 import nnvm.symbol as sym
 import nnvm.compiler
 from nnvm.testing.config import ctx_list
 from nnvm.compiler import graph_util
-from tvm.contrib import graph_runtime as runtime
 from nnvm.graph import GraphIndex
 from PIL import Image
 from tvm.contrib import util, rpc
 from topi.nn.bitserial_conv2d import bitpack
 from topi.util import get_const_tuple
+from topi.nn.pad import pad
+import pickle
+
+from tvm.contrib import graph_runtime
+# from tvm.contrib.debugger import debug_runtime as graph_runtime
 
 import tensorflow as tf
 from riptide.binary.binary_funcs import *
@@ -47,16 +50,21 @@ with graph.as_default():
         saver.restore(sess, '/shared/jwfromm/models/vggnet_medlr_2/model.ckpt-1201110') # imagenet
         input_shape = (1, 224, 224, 3)
         output_shape = (1, 1000)
+        # print ("Tensorflow output:", get_numpy(sess, model(tf.ones(shape=input_shape), training=False)))
 
         # saver.restore(sess, '/shared/jwfromm/vgg_dorefa_shiftnorm_scalu/model.ckpt-60000') # cifar10
         # input_shape = (1, 32, 32, 3)
         # output_shape = (1, 10)
     # model.load_weights('/shared/jwfromm/models/vgg_dorefa_true_shiftnorm_confirm/model.ckpt-0')
 
-RASP = False
+RASP = True
 REPEATS = 20
-opt_level = 0
-bitpack_weights = False 
+opt_level = 3
+bitpack_weights = True 
+save = False
+directory = '/sampa/home/cowanmeg/tvm-current/end2end/models'
+filename = directory + '/network.txt'
+f = open(filename, 'w')
 
 local_ctx = tvm.cpu(0)
 if RASP:
@@ -71,8 +79,11 @@ abits = 2
 wbits = 1
 layout = 'NHWC'
 kernel_layout = 'HWIO'
-kernel_bit_axis = 2
 kernel_pack_axis = 2
+if RASP:
+    kernel_bit_axis = 2
+else:
+    kernel_bit_axis = 4
 kernel_pack_dtype = 'uint8'
 output_dtype = 'float32'
 
@@ -95,7 +106,7 @@ def map_neg1_to_0(bp_weights):
     return weights
 
 # Loading in numpy parameters
-def load_parameter(stop_layer):
+def load_parameter(stop_layer=None):
     params = {}
     dtypes = {}
 
@@ -116,11 +127,15 @@ def load_parameter(stop_layer):
             key = layer.name + '_weight'
             if bitpack_weights:
                 A = tvm.placeholder(weights.shape, dtype='int16')
-                B = bitpack(A, wbits, kernel_pack_axis, kernel_bit_axis, kernel_pack_dtype)
+                # Raspberry pi requires input channels to be multiple of 8
+                if RASP and weights.shape[3] % 8 != 0:
+                    CI_PAD = weights.shape[3] % 8
+                    A = pad(A, [0, 0, 0, 0], [0, 0, 0, CI_PAD], name='PaddedWeights')
+                B = bitpack(A, wbits, pack_axis=kernel_pack_axis, bit_axis=kernel_bit_axis, pack_type=kernel_pack_dtype)
                 weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), local_ctx)
                 s = tvm.create_schedule(B.op)
                 func = tvm.build(s, [A, B], "llvm")
-                weights_tvm = tvm.nd.array(weights, ctx)
+                weights_tvm = tvm.nd.array(weights, local_ctx)
                 weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), local_ctx)
                 func(weights_tvm, weights_bitpacked)
                 params[key] = weights_bitpacked.asnumpy()
@@ -180,7 +195,6 @@ def load_parameter(stop_layer):
             key = layer.name + 'clip_a_max'
             params[key] = threshold
             dtypes[key] = 'int16'
-            print (threshold, zeros)
 
             # Map -1 weights to 0
             bp_weights = weights.astype('int16').transpose()
@@ -190,11 +204,11 @@ def load_parameter(stop_layer):
             key = layer.name + '_weight'
             if bitpack_weights:
                 A = tvm.placeholder(weights.shape, dtype='int16')
-                B = bitpack(A, wbits, kernel_pack_axis, kernel_bit_axis, kernel_pack_dtype)
+                B = bitpack(A, wbits, pack_axis=1, bit_axis=1, pack_type=kernel_pack_dtype)
                 weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), local_ctx)
                 s = tvm.create_schedule(B.op)
                 func = tvm.build(s, [A, B], "llvm")
-                weights_tvm = tvm.nd.array(weights, ctx)
+                weights_tvm = tvm.nd.array(weights, local_ctx)
                 weights_bitpacked = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), local_ctx)
                 func(weights_tvm, weights_bitpacked)
                 params[key] = weights_bitpacked.asnumpy()
@@ -236,11 +250,15 @@ def load_layers(stop_layer=None):
             else:
                 padding = (0, 0)
 
+            if bitpack_weights:
+                bit_axis = kernel_bit_axis
+            else:
+                bit_axis = -1
             network = sym.bitserial_conv2d(data=network, kernel_size=layer.kernel_size, channels=layer.filters,
                             padding=padding, strides=layer.strides,
                             layout=layout, kernel_layout=kernel_layout, use_bias=False, 
                             activation_bits=abits, weight_bits=wbits, pack_dtype='uint8',
-                            out_dtype='int16', name=layer.name)
+                            out_dtype='int16', bit_axis=bit_axis, name=layer.name)
             # Scaling back down to quantized data
             # Step 1 -> Add to imitate round nearest instead of floor
             
@@ -248,7 +266,15 @@ def load_layers(stop_layer=None):
             network = network + r
             network = sym.clip_channelwise(network, axis=3, name=layer.name+'clip')
             network = sym.right_shift_channelwise(network, axis=3, name=layer.name+'shift')
-            
+            print('network = sym.bitserial_conv2d(data=network, kernel_size=%s, channels=%d, ' \
+                  'padding=%s, strides=%s, '\
+                  'layout=layout, kernel_layout=kernel_layout, use_bias=False, ' \
+                  'activation_bits=abits, weight_bits=wbits, pack_dtype=\'uint8\', ' \
+                  'out_dtype=\'int16\', bit_axis=bit_axis, name=\'%s\')' % (layer.kernel_size, layer.filters, padding, layer.strides, layer.name))
+            print('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
+            print ('network = network + r')
+            print ('sym.clip_channelwise(network, axis=3, name=\'%s\' +\'clip\')' % layer.name)
+            print ('network = sym.right_shift_channelwise(network, axis=3, name= \'%s\'+\'shift\')' % layer.name)
         elif 'conv2d' in layer.name:
             # This is the first layer - compute in NCHW
             channels = layer.filters
@@ -260,14 +286,14 @@ def load_layers(stop_layer=None):
                 padding = (0, 0)
             network = sym.conv2d(data=network, channels=channels, kernel_size=kernel_size, strides=strides, padding=padding, 
                         layout=layout, kernel_layout=kernel_layout, use_bias=layer.use_bias, name=layer.name)
-            # network = sym.relu(data=network)
-            
+            print ('network = sym.conv2d(data=network, channels=%d, kernel_size=%s, strides=%s, padding=%s,\
+             layout=layout, kernel_layout=kernel_layout, use_bias=%s, name=\'%s\')' % (channels, kernel_size, strides, padding, layer.use_bias, layer.name))
         elif 'average_pooling2d' in layer.name:
             network = sym.global_avg_pool2d(network, name=layer.name, layout=layout)
-
+            print ('network = sym.global_avg_pool2d(network, name=\'%s\', layout=layout)' % layer.name)
         elif 'max_pooling2d' in layer.name:
             network = sym.max_pool2d(network, name=layer.name, layout=layout, pool_size=layer.pool_size, padding=(0, 0), strides=layer.strides)
-
+            print ('network = sym.max_pool2d(network, name=\'%s\', layout=layout, pool_size=%s, padding=(0, 0), strides=%s)' % (layer.name, layer.pool_size, layer.strides))
         elif 'binary_dense' in layer.name:
             network = sym.flatten(data=network)
             network = sym.bitserial_dense(data=network, units=layer.units, activation_bits=abits, weight_bits=wbits,
@@ -279,29 +305,44 @@ def load_layers(stop_layer=None):
             # TODO: temp to get this working
             network = sym.clip_channelwise(network, axis=0, name=layer.name+'clip')
             network = sym.right_shift_channelwise(network, axis=0, name=layer.name+'shift')
-
+            print ('network = sym.flatten(data=network)')
+            print ('network = sym.bitserial_dense(data=network, units=%d, activation_bits=abits, weight_bits=wbits, ' \
+                   'pack_dtype=\'uint8\', out_dtype=\'int16\', name=\'%s\')' % (layer.units, layer.name))
+            print ('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
+            print ('network = network + r')
+            print ('network = sym.clip_channelwise(network, axis=0, name=\'%s\'+\'clip\')' % layer.name)
+            print ('network = sym.right_shift_channelwise(network, axis=0, name=\'%s\'+\'shift\')' % layer.name)
         elif 'scale' in layer.name:
             network = network * layer.scale
             # Quantize
             network = sym.clip(data=network, a_min=0.0, a_max=1.0)
             data = network * ((1 << abits) - 1) + 0.5
             network = sym.cast(data=data, dtype='int16')
-
+            print ('network = network * %d' % layer.scale)
+            print ('network = sym.clip(data=network, a_min=0.0, a_max=1.0)')
+            print ('data = network * ((1 << abits) - 1) + 0.5')
+            print ('network = sym.cast(data=data, dtype=\'int16\')')
         elif 'scalu' in layer.name:
             scale = sym.Variable(layer.name, shape=layer.input_shape)
             network = sym.cast(data=network, dtype='float32')
             network = network * scale
-
+            print ('scale = sym.Variable(\'%s\', shape=%s)' % (layer.name, layer.input_shape))
+            print ('network = sym.cast(data=network, dtype=\'float32\')')
+            print ('network = network * scale')
         elif 'max_pooling2d' in layer.name:
             network = sym.max_pool2d(data=network, pool_size=layer.pool_size, 
                 strides=layer.strides, name=layer.name, layout=layout)
+            print ('network = sym.max_pool2d(data=network, pool_size=%s, ' \
+                   'strides=%s, name=\'%s\', layout=layout)' % (layer.pool_size, layer.srides, layer.name))
         elif 'batch_normalization' in layer.name:
             # Currently NNVM doesn't support NHWC batch norm - computing it from the components
             moving_mean, moving_var = get_numpy(sess, layer.weights)
             scale = sym.Variable(layer.name + '_scale', shape=moving_var.shape)
             shift = sym.Variable(layer.name + '_shift', shape=moving_mean.shape)
             network = sym.broadcast_add(sym.broadcast_mul(network, scale), shift)
-
+            print ('scale = sym.Variable(\'%s_scale\', shape=%s)' % (layer.name, moving_var.shape))
+            print ('shift = sym.Variable(\'%s_shift\', shape=%s)' % (layer.name, moving_mean.shape))
+            print('network = sym.broadcast_add(sym.broadcast_mul(network, scale), shift)')
 
         if stop_layer == layer.name:
             global output_shape
@@ -313,7 +354,9 @@ def load_layers(stop_layer=None):
                 output_dtype = 'int16'
             break
 
+    print (network)
     return network
+  
 
 def load_test_image():
     data_np = np.ones(shape=(input_shape)).astype('float32')
@@ -331,15 +374,19 @@ def run(data, stop_layer=None):
 
         rlib = remote.load_module('net.o')
         rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
-        module = runtime.create(graph, rlib, ctx)
+        module = graph_runtime.create(graph, rlib, ctx)
+        # module = graph_runtime.create(graph, rlib, ctx, dump_root="/tmp/tvmdbg")
     else:
         rparams = {k: tvm.nd.array(v, ctx) for k, v in params.items()}
-        module = runtime.create(graph, lib, ctx)
+        module = graph_runtime.create(graph, lib, ctx)
         
     module.set_input(**rparams)
     module.set_input("data", data)
     module.run()
     out =  module.get_output(0, tvm.nd.empty(output_shape, output_dtype, ctx=ctx)).asnumpy()
+    
+    ftimer = module.module.time_evaluator("run", ctx, 3)
+    print (ftimer())
     return out
 
 def get_network():
@@ -356,6 +403,7 @@ def build_network(stop_layer=None):
     network = load_layers(stop_layer)
     params, dtypes = load_parameter(stop_layer)
 
+    # Does it make a difference if I call with tvm.target.rasp() here?
     with nnvm.compiler.build_config(opt_level=opt_level):
         graph, lib, params = nnvm.compiler.build(network, target, 
             dtype=dtypes, 
@@ -364,16 +412,26 @@ def build_network(stop_layer=None):
         # print (graph.ir())
     # print (graph.json())
     graph_json = json.loads(graph.json())
-
-    # print (graph_json)
-    # print (graph_json.keys())
-    # print (graph_json['attrs'].keys())
-    
     graph_index = GraphIndex(graph)
+    pickle.dump(dtypes, open(os.path.join(directory, "vggnet_dtypes.p"), 'wb'))
+
+    if save:
+        pickle.dump(dtypes, open(os.path.join(directory, "vggnet_dtypes.p"), 'wb'))
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        home_dir = util.tempdir()
+        path_lib = os.path.join(directory, "rasp_vggnet.tar")
+        lib.export_library(path_lib)
+        with open(os.path.join(directory, "rasp_vggnet.json"), "w") as fo:
+            fo.write(graph.json())
+        with open(os.path.join(directory, "rasp_vggnet.params"), "wb") as fo:
+            fo.write(nnvm.compiler.save_param_dict(params))
+
     return graph, lib, params, graph_index, graph_json
 
 
 if __name__ == '__main__':
     with graph.as_default():
         data_tvm, data_tf = load_test_image()
-        run(data_tvm, 'binary_conv2d')
+        out = run(data_tvm)
+        # print (out)

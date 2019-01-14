@@ -157,17 +157,26 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
   CHECK_EQ(param.strides.ndim(), 2U)
       << "incorrect stride size: " << param.strides;
 
-  // Weight shape if there was no packing, if there was packing this does not equal weight shape
-  TShape wshape({param.kernel_size[0],
-                 param.kernel_size[1],
-                 dshape[3],
-                 param.channels});
+  // Weight shape - check to see if the bit_axis is filled in, then the weights are prepacked
+  std::vector<dim_t> shape{param.kernel_size[0],
+                             param.kernel_size[1],
+                             dshape[3],
+                             param.channels};
+  const int bit_axis(param.bit_axis);
+  auto shape_itr = shape.begin();
+  if (bit_axis != -1) {
+    dim_t pack_amount = 8;
+    if (param.pack_dtype == 8)
+      pack_amount = 16;
+    else if (param.pack_dtype == 9)
+      pack_amount = 32;
+    else if (param.pack_dtype == 10)
+      pack_amount = 64;
 
-  TShape wshape_packed({param.kernel_size[0],
-                 param.kernel_size[1],
-                 param.weight_bits,
-                 dshape[3] / 8,
-                 param.channels});
+    shape[2] = shape[2] / pack_amount;
+    shape.insert(shape_itr + bit_axis, 1, param.weight_bits);
+  } 
+  TShape wshape(shape);
 
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kWeight, wshape);
   if (param.use_bias) {

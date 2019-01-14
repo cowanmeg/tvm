@@ -219,6 +219,7 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
   int pack_dtype;
   int activation_bits;
   int weight_bits;
+  int bit_axis;
   bool use_bias;
   bool dorefa;
 
@@ -262,6 +263,8 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
       .describe("Whether the layer uses a bias vector.");
     DMLC_DECLARE_FIELD(dorefa).set_default(true)
       .describe("Style of performing popcount");
+    DMLC_DECLARE_FIELD(bit_axis).set_default(-1)
+      .describe("Optional placement of bit axis for prepacked weights");
   }
   // constants
   static const constexpr int kData = 0;

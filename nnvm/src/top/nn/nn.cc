@@ -144,8 +144,8 @@ inline bool BitserialDenseInferShape(const nnvm::NodeAttrs& attrs,
     oshape[oshape.ndim() - 1] = param.units;
     NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
   }
-  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kWeight, TShape({param.units, num_inputs}));
-                          //TShape({param.units, param.weight_bits, num_inputs/8}));
+  NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kWeight, //TShape({param.units, num_inputs}));
+                          TShape({param.units, param.weight_bits, num_inputs/8}));
   if (param.use_bias) {
     NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, DenseParam::kBias, TShape({param.units}));
   }

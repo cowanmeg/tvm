@@ -130,7 +130,6 @@ class XGBoostCostModel(CostModel):
         self._reset_pool(self.space, self.target, self.task)
 
         self.feature_len = self._get_feature([0]).shape[1]
-
     def _reset_pool(self, space, target, task):
         """reset processing pool for feature extraction"""
 
@@ -292,32 +291,36 @@ class XGBoostCostModel(CostModel):
 
         indexes = np.array(indexes)
         need_extract = [x for x in indexes if x not in fea_cache]
-
         if need_extract:
             pool = self._get_pool()
             feas = pool.map(self.feature_extract_func, need_extract)
             for i, fea in zip(need_extract, feas):
-                fea_cache[i] = fea if fea is not None else np.zeros(self.feature_len)
+                try:
+                    fea_cache[i] = fea if fea is not None else np.zeros(self.feature_len)
+                except AttributeError:
+                    print("Self:", self)
+                    print (self.__dict__.keys())
 
         ret = np.empty((len(indexes), fea_cache[indexes[0]].shape[-1]), dtype=np.float32)
         for i, ii in enumerate(indexes):
             try:    
                 ret[i, :] = fea_cache[ii]
             except ValueError:
+                print ("\n XGBoost cost model error: Feature extraction")
                 from tvm.contrib.util import get_lower_ir
 
                 config = _extract_space.get(indexes[i-1])
                 with _extract_target:
                    sch, args = _extract_task.instantiate(config)
-                print("Older")
-                print(get_lower_ir(sch))
+                #print("Older")
+                #print(get_lower_ir(sch))
 
-                print("=====================")
+                #print("=====================")
                 config = _extract_space.get(indexes[i])
                 with _extract_target:
                    sch, args = _extract_task.instantiate(config)
-                print("Newer")
-                print(get_lower_ir(sch))
+                # print("Newer")
+                # print(get_lower_ir(sch))
                 exit()
           
         return ret

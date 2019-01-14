@@ -62,7 +62,10 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     """
 
     data_packed = bitpack(data, data_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
-    weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    if len(weight.shape) == 4:
+        weight_packed = bitpack(weight, weight_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
+    else:
+        weight_packed = weight
     Y, DB, K = get_const_tuple(data_packed.shape)
     X, WB, _ = get_const_tuple(weight_packed.shape)
 

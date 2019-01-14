@@ -112,7 +112,7 @@ def schedule_bitserial_conv2d(cfg, outs):
             conv_out = op.input_tensors[0]
             kernel_vec = conv_out.op.input_tensors[1]
             kernel_q = kernel_vec.op.input_tensors[0]
-            kernel = kernel_q.op.input_tensors[0]
+            # kernel = kernel_q.op.input_tensors[0] # Need to keep this?
             data_vec = conv_out.op.input_tensors[0]
             data_q = data_vec.op.input_tensors[0]
             data = data_q.op.input_tensors[0]
@@ -121,20 +121,20 @@ def schedule_bitserial_conv2d(cfg, outs):
                 data_pad = data_q
                 data_q = data
                 data = data_q.op.input_tensors[0]
-            if "QuantizeInput" in kernel.op.name:
-                # Need to go up 1 further, from the combine in bitpack
-                kernel = kernel.op.input_tensors[0]
+            # if "QuantizeInput" in kernel.op.name:
+            #     # Need to go up 1 further, from the combine in bitpack
+            #     kernel = kernel.op.input_tensors[0]
             if "QuantizeInput" in data.op.name:
                 # Need to go up 1 further, from the combine in bitpack
                 data = data.op.input_tensors[0]
 
             if 'spatial_bitserial_conv_nchw' in op.tag:
                 schedule_bitserial_conv2d_nchw(cfg, s, data, data_q, data_pad, data_vec,
-                                              kernel, kernel_q, kernel_vec,
+                                              kernel_q, kernel_q, kernel_vec,
                                               conv_out, output, outs[0])
             elif 'spatial_bitserial_conv_nhwc' in op.tag:
                 schedule_bitserial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
-                                              kernel, kernel_q, kernel_vec,
+                                              kernel_q, kernel_q, kernel_vec,
                                               conv_out, output, outs[0])
         scheduled_ops.append(op)
 

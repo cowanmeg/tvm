@@ -14,17 +14,18 @@ from topi.util import get_const_tuple
 from tvm.contrib import util
 from tvm.autotvm.task.nnvm_integration import serialize_args
 from tvm.contrib.util import tempdir
-from end2end.nnvm_vgg import get_network
 import tvm.contrib.graph_runtime as runtime
 from tvm.contrib.debugger import debug_runtime as debug_runtime
+from end2end.nnvm_vgg import get_network
+
 
 DEFAULT_TRIALS = 10
-DEBUG = False # Can't debug remote graph
+DEBUG = False
 target = tvm.target.arm_cpu("rasp3b")
 target_host = 'llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon'
 device_key = 'rpi3b'
-# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vgg11_rasp3b.log'
-log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/empty.log'
+log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vggnet_rasp3b.log'
+# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/empty.log'
 
 tuning_option = {
     'log_filename': log_file,
@@ -129,7 +130,9 @@ def tune_tasks(tasks,
 
 def tune_and_evaluate(trials, tune):
     with target:
-        net, params, dtypes, input_shape, output_shape = get_network()
+        net, dtypes, params = get_network()
+        input_shape = (1, 224, 224, 3)
+        output_shape = (1, 1000)
         tasks = autotvm.task.extract_from_graph(net, target=target,
                                             shape={'data': input_shape}, dtype=dtypes,
                                             symbols=(nnvm.sym.bitserial_conv2d, nnvm.sym.bitserial_dense))

@@ -47,6 +47,12 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     Y, DB, K = get_const_tuple(data_packed.shape)
     X, WB, _ = get_const_tuple(weight_packed.shape)
 
+    # Pad Inputs so that microkernel can be used
+    if (X % 8 != 0):
+        X_PAD = X % 8
+        data_packed = pad(data_packed, [0, 0, 0], [X_PAD, 0, 0], name='PaddedInput')
+        X += X_PAD
+
     ######## Search space
     x, y = cfg.axis(X), cfg.axis(Y)
     db, wb, k = cfg.reduce_axis(DB), cfg.reduce_axis(WB), cfg.reduce_axis(K)
@@ -54,11 +60,11 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
                                 filter=lambda xx: xx.size[-1] == 8 or xx.size[-1] == 16)
     yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2)
     
-    if (X % 8 == 0): # Can use the arm microkernel
-        xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
-                                    filter=lambda xx: xx.size[-1] % 8 == 0)
-    else:
-        xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
+    # if (X % 8 == 0): # Can use the arm microkernel
+    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2,
+                                    filter=lambda xx: xx.size[-1] == 8)
+    # else:
+    #     xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, xi, ki], 
                         policy='candidate', candidate=[
@@ -148,7 +154,7 @@ def schedule_bitserial_dense(cfg, outs):
         
         nfactor = cfg['tile_x'].size[1]
         kfactor = cfg['tile_k'].size[1]
-
+        
         if nfactor % 8 == 0:
             pc = _intrin_popcount(nfactor, kfactor, WB, DB, dorefa)
             s[output].tensorize(wb, pc)   

@@ -82,17 +82,17 @@ def schedule_bitserial_dense(cfg, outs):
             output = op.output(0)
             weight_vec = op.input_tensors[0]
             weight_packed = weight_vec.op.input_tensors[0]
-            weight = weight_packed.op.input_tensors[0]
-            if "QuantizeInput" in weight.op.name:
-                # Need to go up 1 further, from the combine in bitpack
-                weight = weight.op.input_tensors[0]
+            # weight = weight_packed.op.input_tensors[0]
+            # if "QuantizeInput" in weight.op.name:
+            #     # Need to go up 1 further, from the combine in bitpack
+            #     weight = weight.op.input_tensors[0]
 
             data_vec = op.input_tensors[1]
             # data_packed = data_vec.op.input_tensors[0]
             data = data_vec.op.input_tensors[0]
             if "QuantizeInput" in data.op.name:
                 data = data.op.input_tensors[0]
-            _schedule(cfg, s, data, weight, data_vec, weight_vec, output)
+            _schedule(cfg, s, data, weight_packed, data_vec, weight_vec, output)
         else:
             raise RuntimeError("Unsupported operator: %s" % OP.tag)
 

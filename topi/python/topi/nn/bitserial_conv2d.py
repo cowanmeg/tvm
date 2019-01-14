@@ -192,7 +192,6 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
     rx = tvm.reduce_axis((0, kernel_w), name='rx')
     b1 = tvm.reduce_axis((0, activation_bits), name='b1')
     b2 = tvm.reduce_axis((0, weight_bits), name='b2')
-    print ("NN bitserial_conv2d outshape", (nn, yy, xx, ff))
     def _conv(nn, yy, xx, ff):
         b1b2 = (b1+b2).astype(out_dtype)
         return tvm.sum((tvm.popcount(

@@ -102,6 +102,89 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
         name="Conv2dOutput", tag="bitserial_conv2d_nchw")
 
 @tvm.target.generic_func
+def old_bitserial_conv2d_nhwc(data, kernel,
+                          stride, padding, activation_bits, weight_bits,
+                          pack_dtype, out_dtype, dorefa):
+    """Bitserial Conv2D operator.
+
+    Parameters
+    ----------
+    input : tvm.Tensor
+        # 4-D with shape [batch, in_channel, in_height, in_width] or
+                       [batch, in_height, in_width, in_channel]
+
+    filter : tvm.Tensor
+        4-D with shape [num_filter, in_channel, filter_height, filter_width] or
+		       [filter_height, filter_width, in_channel, num_filter]
+
+    stride : int or a list/tuple of two ints
+        stride size, or [stride_height, stride_width]
+
+    padding : int or a list/tuple of two ints
+        padding size, or [pad_height, pad_width]
+
+    activation_bits: int
+        number of bits used for activations/input elements
+
+    weight_bits: int
+        number of bits used for weight elements
+
+    out_dtype: str
+        return type of convolution
+
+    pack_dtype: str
+        bit packing type
+
+    dorefa: bool
+        preform the bitserial dot-product using 2 popcounts (required for DoReFa-Net)
+
+    Returns
+    -------
+    output : tvm.Tensor
+        4-D with shape [batch, out_channel, out_height, out_width] or
+                       [batch, out_height, out_width, out_channel]
+    """
+    assert isinstance(stride, int) or len(stride) == 2
+    Input_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
+    if len(kernel.shape) == 4:
+        Filter_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
+        kernel_h, kernel_w, _, num_filter, _ = get_const_tuple(Filter_q.shape)
+    else:
+        Filter_q = kernel
+        kernel_h, kernel_w, _, _, num_filter = get_const_tuple(Filter_q.shape)
+    batch, in_height, in_width, in_channel_q, _ = get_const_tuple(Input_q.shape)
+
+    if isinstance(stride, int):
+        stride_h = stride_w = stride
+    else:
+        stride_h, stride_w = stride
+    pad_top, pad_left, pad_down, pad_right = padding
+    # compute the output shape
+    out_channel = num_filter
+    out_height = (in_height - kernel_h + pad_top + pad_down) // stride_h + 1
+    out_width = (in_width - kernel_w + pad_left + pad_right) // stride_w + 1
+    pad_before = [0, pad_top, pad_left, 0, 0]
+    pad_after = [0, pad_down, pad_right, 0, 0]
+    PadInput_q = pad(Input_q, pad_before, pad_after, name="PaddedInput")
+
+    rc = tvm.reduce_axis((0, in_channel_q), name='rc')
+    ry = tvm.reduce_axis((0, kernel_h), name='ry')
+    rx = tvm.reduce_axis((0, kernel_w), name='rx')
+    b1 = tvm.reduce_axis((0, activation_bits), name='b1')
+    b2 = tvm.reduce_axis((0, weight_bits), name='b2')
+    def _conv(nn, yy, xx, ff):
+        b1b2 = (b1+b2).astype(out_dtype)
+        return tvm.sum((tvm.popcount(
+            PadInput_q[nn, yy * stride_h + ry, xx * stride_w + rx, rc, b1] &
+            Filter_q[ry, rx, rc, ff, b2]) << b1b2).astype(out_dtype),
+                       axis=[rc, ry, rx, b2, b1])
+
+    conv = tvm.compute((batch, out_height, out_width, out_channel), _conv,
+        name="Conv2dOutput", tag="bitserial_conv2d_nhwc")
+
+    return conv
+
+@tvm.target.generic_func
 def bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
                           stride, padding, activation_bits, weight_bits,
                           pack_dtype, out_dtype, dorefa, 
@@ -112,7 +195,7 @@ def bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
     Parameters
     ----------
     input : tvm.Tensor
-        4-D with shape [batch, in_channel, in_height, in_width] or
+        # 4-D with shape [batch, in_channel, in_height, in_width] or
                        [batch, in_height, in_width, in_channel]
 
     filter : tvm.Tensor
@@ -197,6 +280,7 @@ def bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
         output = bitpack(pooled, activation_bits, pack_axis=3, bit_axis=3, pack_type=pack_dtype)
     else:
         output = pooled
+    print (output.shape)
     return output
 
 
@@ -318,7 +402,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, pack_dtype):
     return tvm.compute(kvshape, lambda co, dh, dw, ci, vc, b: \
             kernel_q[dh][dw][ci][co*VC+vc][b], name='kernel_vec')
 
-@autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'cpu', 'direct')
+# @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, in_bits, weight_bits,
                       pack_dtype, out_dtype, dorefa):
     """ Compute convolution with pack on spatial axes. """
@@ -465,7 +549,7 @@ def bitpack(data, bits, pack_axis, bit_axis, pack_type, name="QuantizeInput"):
              # Translate indices for packed data back to original
             element = data(*idx)
             for b in range(bits):
-                extracted_bit = ((element & tvm.const(masks[b])) >> b).astype(pack_type)
+                extracted_bit = ((element & tvm.const(masks[b], "int32")) >> b).astype(pack_type)
                 packed_data[b] = (packed_data[b] | extracted_bit)
                 if k < data_width - 1:
                     packed_data[b] = packed_data[b] << 1

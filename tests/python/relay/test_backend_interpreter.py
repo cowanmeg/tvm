@@ -37,7 +37,8 @@ def test_tuple_value():
 def test_id():
     x = relay.var('x', 'float32')
     ident = relay.Function([x], x)
-    check_eval(ident, [1.0], 1.0)
+    one = np.array(1.0, 'float32')
+    check_eval(ident, [one], one)
 
 
 def test_add_const():
@@ -60,8 +61,8 @@ def test_equal():
     j = relay.var('i', shape=[], dtype='int32')
     z = relay.equal(i, j)
     func = relay.Function([i, j], z, ret_type=relay.TensorType([], 'bool'))
-    i_data = relay.const(0)
-    j_data = relay.const(0)
+    i_data = relay.const(0, 'int32')
+    j_data = relay.const(0, 'int32')
     check_eval(func, [i_data, j_data], True)
 
 
@@ -96,10 +97,10 @@ def test_loop():
     i = relay.var('i', shape=[], dtype='int32')
     accum = relay.var('accum', shape=[], dtype='int32')
     sb = ScopeBuilder()
-    with sb.if_scope(relay.equal(i, relay.const(0))):
+    with sb.if_scope(relay.equal(i, relay.const(0, 'int32'))):
         sb.ret(accum)
     with sb.else_scope():
-        one_less = relay.subtract(i, relay.const(1))
+        one_less = relay.subtract(i, relay.const(1, 'int32'))
         new_accum = relay.add(accum, i)
         sb.ret(relay.Call(sum_up, [one_less, new_accum]))
     func = relay.Function([i, accum], sb.get())
@@ -117,6 +118,18 @@ def test_binds():
     res = intrp.evaluate(y, binds={x: xx}).asnumpy()
     tvm.testing.assert_allclose(xx + xx, res)
 
+def test_kwargs_params():
+    x = relay.var("x", shape=(1, 10))
+    y = relay.var("y", shape=(1, 10))
+    z = relay.var("z", shape=(1, 10))
+    f = relay.Function([x, y, z], x + y + z)
+    x_data = np.random.rand(1, 10).astype('float32')
+    y_data = np.random.rand(1, 10).astype('float32')
+    z_data = np.random.rand(1, 10).astype('float32')
+    params = { 'y': y_data, 'z': z_data }
+    intrp = create_executor("debug")
+    res = intrp.evaluate(f)(x_data, **params).data
+    tvm.testing.assert_allclose(res.asnumpy(), x_data + y_data + z_data)
 
 if __name__ == "__main__":
     test_id()
@@ -126,3 +139,4 @@ if __name__ == "__main__":
     test_simple_loop()
     test_loop()
     test_binds()
+    test_kwargs_params()

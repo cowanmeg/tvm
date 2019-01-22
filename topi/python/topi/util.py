@@ -78,6 +78,28 @@ def get_const_int(expr):
     return int(expr.value)
 
 
+def get_const_float(expr):
+    """Verifies expr is a floating point and get the constant value.
+
+    Parameters
+    ----------
+    expr : tvm.Expr or float
+        The input expression.
+
+    Returns
+    -------
+    out_value : float
+        The output.
+    """
+    if isinstance(expr, float):
+        return float(expr)
+    if not isinstance(expr, tvm.expr.FloatImm):
+        expr = tvm.ir_pass.Simplify(expr)
+    if not isinstance(expr, tvm.expr.FloatImm):
+        raise ValueError("Expect value to be constant float")
+    return float(expr.value)
+
+
 def equal_const_int(expr, value):
     """Returns if expr equals value.
 
@@ -116,6 +138,26 @@ def get_const_tuple(in_tuple):
     out_tuple = ()
     for elem in in_tuple:
         value = get_const_int(elem)
+        out_tuple = out_tuple + (value, )
+    return out_tuple
+
+
+def get_float_tuple(in_tuple):
+    """Verifies input tuple is FloatImm, returns tuple of float.
+
+    Parameters
+    ----------
+    in_tuple : tuple of Expr
+        The input.
+
+    Returns
+    -------
+    out_tuple : tuple of float
+        The output.
+    """
+    out_tuple = ()
+    for elem in in_tuple:
+        value = get_const_float(elem)
         out_tuple = out_tuple + (value, )
     return out_tuple
 
@@ -207,9 +249,9 @@ def const_matrix(matrix, name="const_matrix"):
         now = tvm.const(0.0, dtype)
         for ii in range(row):
             for jj in range(col):
-                now = tvm.select(tvm.all(i % row == ii, j % col == jj),
-                                 tvm.const(matrix[ii][jj], dtype),
-                                 now)
+                now = tvm.expr.Select(tvm.all(i % row == ii, j % col == jj),
+                                      tvm.const(matrix[ii][jj], dtype),
+                                      now)
         return now
 
     return tvm.compute(matrix.shape, select_array, name=name)

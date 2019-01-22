@@ -8,7 +8,7 @@ from .. import generic, tag
 from ..nn.bitserial_conv2d import bitserial_conv2d_nhwc, bitserial_conv2d_nchw#, _get_schedule, _get_workload
 from ..nn.bitserial_conv2d import SpatialPackNCHW, SpatialPackNHWC, spatial_pack_nchw, spatial_pack_nhwc
 # from ..nn.bitserial_conv2d import _WORKLOADS, _SCH_TO_DECL_FUNC_QUANT
-from tvm.autotvm.task.nnvm_integration import deserialize_args
+from tvm.autotvm.task.topi_integration import deserialize_args
 
 # _QUANTIZED_SCHEDULES_NCHW = [
 #     # resnet
@@ -91,7 +91,7 @@ from tvm.autotvm.task.nnvm_integration import deserialize_args
 
 # @generic.schedule_bitserial_conv2d_nchw.register(["cpu"])
 # @generic.schedule_bitserial_conv2d_nhwc.register(["cpu"])
-@autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'cpu', 'direct')
+# @autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'cpu', 'direct')
 @autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nchw, ['arm_cpu', 'cpu'], 'direct')
 def schedule_bitserial_conv2d(cfg, outs):
     """CPU schedule for bitserial convolutions NCHW and NHWC"""

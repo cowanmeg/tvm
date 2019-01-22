@@ -11,7 +11,7 @@ from ..nn.bitserial_conv2d import bitpack, bitserial_conv2d_nhwc
 from ..nn.util import get_pad_tuple
 from ..util import get_const_int, get_const_tuple
 from .. import generic
-from tvm.autotvm.task.nnvm_integration import deserialize_args
+from tvm.autotvm.task.topi_integration import deserialize_args
 
 
 @autotvm.task.register("topi_nn_bitserial_conv2d_nhwc")
@@ -20,8 +20,8 @@ def _topi_bitserial_conv2d(*args, **kwargs):
     C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
     s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
     data, kernel, bias, clip_min, clip_max, rshift = args[:6]
-
-    return s, [data, kernel, bias, clip_min, clip_max, rshift, C]
+    return s, [data, kernel, clip_min, clip_max, rshift, C]
+    # return s, [data, kernel, C]
 
 # @_get_schedule.register("arm_cpu")
 def _get_schedule_bitserial_conv2d(wkl, layout):
@@ -44,8 +44,126 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
+# @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
+def spatial_pack_nhwc(cfg, data, kernel,
+                      stride, padding, activation_bits, weight_bits, 
+                      pack_dtype, out_dtype, dorefa):
+    """ Compute convolution with pack on spatial axes. """
+    assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
+    assert pack_dtype == 'uint8', "only support packing into 8 bits"
+
+    N, H, W, CI = get_const_tuple(data.shape)
+    if len(kernel.shape) == 4:
+        KH, KW, _, CO = get_const_tuple(kernel.shape)
+        CI_packed = CI // 8
+    else:
+        KH, KW, KB, CI_packed, CO = get_const_tuple(kernel.shape)
+
+    # HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
+    TPAD, LPAD, DPAD, RPAD = padding
+
+    if isinstance(stride, (tuple, list)):
+        HSTR, WSTR = stride
+    else:
+        HSTR, WSTR = stride, stride
+    HCAT, WCAT = KH-1, KW-1
+
+    PAD_H = H + (TPAD + DPAD)
+    PAD_W = W + (LPAD + RPAD)
+    OH = (PAD_H - KH) // HSTR + 1
+    OW = (PAD_W - KW) // WSTR + 1
+    oshape = (1, OH, OW, CO)
+
+    # Pad input channels of weights and data when it is not a multiple of 8
+    if CI_packed % 8 != 0:
+        CI_PAD = CI_packed % 8
+        CI_packed += CI_PAD
+    else:
+        CI_PAD = 0
+
+    # ==================== define configuration space ====================
+    n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
+    ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+    ib, kb = cfg.reduce_axis(activation_bits), cfg.reduce_axis(weight_bits)
+
+    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] == 8)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] >= 2)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] >= 2)
+    # cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+    ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
+                                 filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
+    re_axes = cfg.define_reorder("reorder_0",
+                          [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
+                          policy='candidate', 
+                          candidate=[
+                          [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
+                          [n, oh, ow, co, vh, vw, kw, kh, ci_o, kb, ib, vc, ci_i],
+                          ])
+    cfg.add_flop(2 * N * OH * OW * CO * CI * 8 * KH * KW)
+
+    if cfg.is_fallback:
+        assert True, "Error: Fall back not implemented yet"
+    # ====================
+
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+
+    data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
+
+    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, len(kernel.shape) == 4)
+    if kernel_vec.shape[-1] % 8 != 0 and CI_PAD != 0:
+        kernel_vec = pad(kernel_vec, [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, CI_PAD])
+    
+    N, H, W, IB, CI = data_q.shape
+    OCO, KH, KW, KB, VC, CI = kernel_vec.shape
+
+    dvshape = (N, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, IB, CI)
+    ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
+
+    if (TPAD != 0 and RPAD != 0):
+        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, CI_PAD), name="data_pad")
+    elif CI_PAD != 0:
+        data_pad = pad(data_q, (0, 0, 0, 0, 0), (0, 0, 0, 0, CI_PAD), name="data_pad")
+    else:
+        data_pad = data_q
+
+    data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, b, ci: \
+        data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][b][ci], name='data_vec')
+    ci = tvm.reduce_axis((0, CI), name='ci')
+    dh = tvm.reduce_axis((0, KH), name='dh')
+    dw = tvm.reduce_axis((0, KW), name='dw')
+    ib = tvm.reduce_axis((0, IB), name='ib')
+    kb = tvm.reduce_axis((0, KB), name='kb')
+
+    def _conv(n, h, w, co, vh, vw, vc):
+        return tvm.sum((tvm.popcount(
+            kernel_vec[co, dh, dw, kb, vc, ci].astype('uint16') &
+            data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci].astype('uint16'))
+                        << (kb + ib).astype('uint16')), axis=[dh, dw, kb, ib, ci])
+    def _dorefa_conv(n, h, w, co, vh, vw, vc):
+        return tvm.sum((tvm.popcount(
+            kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
+            data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci].astype('int16')) -
+            tvm.popcount(~kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
+            data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci]).astype('int16'))
+                        << (kb + ib).astype('int16'), axis=[dh, dw, kb, ib, ci])
+    if dorefa:
+        conv_vec = tvm.compute(ovshape, _dorefa_conv, name='conv_vec', tag='dorefa')
+    else:
+        conv_vec = tvm.compute(ovshape, _conv, name='conv_vec')
+
+    conv =  tvm.compute(oshape, lambda n, h, w, co:
+                       conv_vec[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
+                       name='conv', tag='spatial_bitserial_conv_nhwc')
+
+    return conv
+
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
-def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
+def packed(cfg, data, kernel, bias, clip_min, clip_max, rshift,
                       stride, padding, activation_bits, weight_bits, 
                       pack_dtype, out_dtype, dorefa, 
                       pool_size, pool_stride, pool_pad,
@@ -53,7 +171,7 @@ def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into 8 bits"
-    print (data, kernel, bias, clip_min, clip_max, rshift)
+
     if pack_inputs:
         N, H, W, CI = get_const_tuple(data.shape)
     else:
@@ -94,8 +212,10 @@ def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
 
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
                        filter=lambda x: x.size[-1] == 8)
-    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2)
-    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] >= 2)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
+                       filter=lambda x: x.size[-1] >= 2)
     # cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
                                  filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
@@ -165,20 +285,22 @@ def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
 
 
     conv =  tvm.compute(oshape, lambda n, h, w, co:
-                       conv_vec[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
+                ((tvm.max(tvm.min(conv_vec[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype), 
+                    clip_max(co)), tvm.const(0, out_dtype) + bias[co])) >> rshift[co]),
+
                        name='conv', tag='spatial_bitserial_conv_nhwc')
 
     if not pack_outputs and pool_size is None:
         return conv
 
-    conv_bias = conv + bias
-    conv_clip = topi.clip_channelwise(conv_bias, clip_min, clip_max, axis=3)
-    conv_shift = topi.right_shift_channelwise(conv_clip, rshift, axis=3)
+    # conv_bias = conv + bias
+    # conv_clip = topi.clip_channelwise(conv, clip_min, clip_max, axis=3)
+    # conv_shift = topi.right_shift_channelwise(conv_clip, rshift, axis=3)
 
     if pool_size is None:
-        pooled = conv_shift
+        pooled = conv
     else:
-        pooled = topi.nn.pool(conv_shift, kernel=pool_size,
+        pooled = topi.nn.pool(conv, kernel=pool_size,
             stride=pool_stride, padding=pool_pad, pool_type='max', layout='NHWC')
 
     # For some reason this is much faster?
@@ -187,7 +309,7 @@ def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
     def _bitpack(nn, yy, xx, bb, ff):
         packed_data = tvm.const(0, pack_dtype)
         data_width = 8
-        mask = tvm.select(bb==0, 0x1, 0x2)
+        mask = tvm.expr.Select(bb==0, 0x1, 0x2)
         for k in range(data_width):
             f = ff * data_width + k
             element = pooled[nn, yy, xx, f]
@@ -203,9 +325,7 @@ def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
         output = tvm.compute((n, h, w, activation_bits, c//8), _bitpack, name='BitpackedConv')
     else:
         output = pooled
-
     return output
-
     
 def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
     dtype = 'uint8'
@@ -332,15 +452,15 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
         s[data_pad].compute_inline()
 
     _, h, _, _, _, _, _ = s[data_vec].op.axis
-    # cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
-    # oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
-    s[data_vec].parallel(h)
+    cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
+    oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
+    s[data_vec].parallel(oh)
 
     #### Schedule kernel packing
     co, _, _, _, _, _ = s[kernel_vec].op.axis
-    # cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
-    # oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
-    s[kernel_vec].parallel(co)
+    cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
+    oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
+    s[kernel_vec].parallel(oco)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
@@ -370,12 +490,19 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
     s = s.normalize()
     return s
 
-def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, dorefa):
+def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, kernel_vec, data_vec, dorefa):
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
     KB = 1
     IB = 2
+
+    # Schedule relayout
+    _, h, _, _, _, _, _ = s[data_vec].op.axis
+    s[data_vec].parallel(h)
+
+    co, _, _, _, _, _ = s[kernel_vec].op.axis
+    s[kernel_vec].parallel(co)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_vec].op.axis
@@ -389,45 +516,48 @@ def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, do
     pc = _intrin_popcount(VC, kfactor, KB, IB, dorefa)
     s[conv_vec].tensorize(kb, pc)  
 
-    n, h, w, co = s[conv].op.axis
-    co, vc = s[conv].split(co, VC)
-    oh, ow, vh, vw = s[conv].tile(h, w, VH, VW)
-    s[conv].reorder(n, oh, ow, co, vh, vw, vc)
-    s[conv_vec].compute_at(s[conv], co)
-    s[conv].vectorize(vc)
+    n_conv, h_conv, w_conv, co_conv = s[conv].op.axis
+    co_conv, vc_conv = s[conv].split(co_conv, VC)
+    oh_conv, ow_conv, vh_conv, vw_conv = s[conv].tile(h_conv, w_conv, VH, VW)
+    s[conv].reorder(n_conv, oh_conv, ow_conv, co_conv, vh_conv, vw_conv, vc_conv)
+    s[conv_vec].compute_at(s[conv], vw_conv)
+    # s[conv].vectorize(vc_conv)
 
     # Schedule bias, clip, etc. 
-    n, h, w, co = s[bias].op.axis
-    co, vc = s[bias].split(co, VC)
-    oh, ow, vh, vw = s[bias].tile(h, w, VH, VW)
-    s[bias].reorder(n, oh, ow, co, vh, vw, vc)
-    s[conv].compute_at(s[bias], vw)
-    s[bias].vectorize(vc)
+    # n, h, w, co = s[bias].op.axis
+    # co, vc = s[bias].split(co, VC)
+    # oh, ow, vh, vw = s[bias].tile(h, w, VH, VW)
+    # s[bias].reorder(n, oh, ow, co, vh, vw, vc)
+    # s[conv].compute_at(s[bias], vc)
+    # s[bias].compute(s[conv], vc_conv)
+    # s[bias].vectorize(vc)
 
-    n, h, w, co = s[clip].op.axis
-    co, vc = s[clip].split(co, VC)
-    oh, ow, vh, vw = s[clip].tile(h, w, VH, VW)
-    s[clip].reorder(n, oh, ow, co, vh, vw, vc)
-    s[bias].compute_at(s[clip], vw)
-    s[clip].vectorize(vc)
+    # n, h, w, co = s[clip].op.axis
+    # co, vc = s[clip].split(co, VC)
+    # oh, ow, vh, vw = s[clip].tile(h, w, VH, VW)
+    # s[clip].reorder(n, oh, ow, co, vh, vw, vc)
+    # s[bias].compute_at(s[clip], vw)
+    # s[clip].vectorize(vc)
 
-    n, h, w, co = s[shift].op.axis
-    co, vc = s[shift].split(co, VC)
-    oh, ow, vh, vw = s[shift].tile(h, w, VH, VW)
-    s[shift].reorder(n, oh, ow, co, vh, vw, vc)
-    s[clip].compute_at(s[shift], vw)
-    s[shift].vectorize(vc)
+    # n, h, w, co = s[shift].op.axis
+    # co, vc = s[shift].split(co, VC)
+    # oh, ow, vh, vw = s[shift].tile(h, w, VH, VW)
+    # s[shift].reorder(n, oh, ow, co, vh, vw, vc)
+    # s[clip].compute_at(s[shift], vw)
+    # s[shift].vectorize(vc)
 
+    # s[conv].compute_at(s[shift], co) <- shift is not direct consumer of conv
 
+    # s[conv].parallel(oh_conv)
     if pool is None:
         n, oh, ow, b, co = s[output].op.axis
-        s[shift].compute_at(s[output], ow)
+        s[conv].compute_at(s[output], ow)
     else:
         n, h, w, co = s[pool].op.axis
         co, vc = s[pool].split(co, VC)
         oh, ow, vh, vw = s[pool].tile(h, w, VH, VW)
         s[pool].reorder(n, oh, ow, co, vh, vw, vc)
-        s[shift].compute_at(s[pool], vw)
+        s[conv].compute_at(s[pool], co)
         s[pool].vectorize(vc)
         if output is None:
             output = pool
@@ -435,8 +565,8 @@ def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, do
             n, oh, ow, b, co = s[output].op.axis
             s[pool].compute_at(s[output], ow)
     
-    fused = s[output].fuse(n, oh)
-    s[output].parallel(fused)
+    # fused = s[output].fuse(n, oh)
+    s[output].parallel(oh)
 
     s = s.normalize()
     return s
@@ -476,29 +606,49 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
                                           kernel_q, kernel_vec, conv_out, output, outs[0], dorefa)
         elif 'BitpackedConv' in op.name:
+            # bitpacked_output = op.output(0)
+            # shift = bitpacked_output.op.input_tensors[0]
+            # if 'pool' in shift.op.tag:
+            #     pool = shift
+            #     shift = pool.op.input_tensors[0]
+            # else:
+            #     pool = None
+            # clip = shift.op.input_tensors[0]
+            # bias = clip.op.input_tensors[0]
+            # conv = bias.op.input_tensors[0]
+            # conv_vec = conv.op.input_tensors[0]
+            # kernel_vec = conv_vec.op.input_tensors[0]
+            # data_vec = conv_vec.op.input_tensors[1]
+            # dorefa = "dorefa" in conv_vec.op.tag
+            # _schedule_packed(cfg, s, bitpacked_output, pool, shift, clip, bias, conv, conv_vec, kernel_vec, data_vec, dorefa)
+
             bitpacked_output = op.output(0)
-            shift = bitpacked_output.op.input_tensors[0]
-            if 'pool' in shift.op.tag:
-                pool = shift
-                shift = pool.op.input_tensors[0]
+            conv = bitpacked_output.op.input_tensors[0]
+            if 'pool' in conv.op.tag:
+                pool = conv
+                conv = pool.op.input_tensors[0]
             else:
                 pool = None
-            clip = shift.op.input_tensors[0]
-            bias = clip.op.input_tensors[0]
-            conv = bias.op.input_tensors[0]
+            # clip = shift.op.input_tensors[0]
+            # bias = clip.op.input_tensors[0]
+            # conv = clip.op.input_tensors[0]
             conv_vec = conv.op.input_tensors[0]
+            kernel_vec = conv_vec.op.input_tensors[0]
+            data_vec = conv_vec.op.input_tensors[1]
             dorefa = "dorefa" in conv_vec.op.tag
-            _schedule_packed(cfg, s, bitpacked_output, pool, shift, clip, bias, conv, conv_vec, dorefa)
+            _schedule_packed(cfg, s, bitpacked_output, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, dorefa)
 
         elif 'pool' in op.tag:
             pool = op.output(0)
-            shift = pool.op.input_tensors[0]
-            clip = shift.op.input_tensors[0]
-            bias = clip.op.input_tensors[0]
-            conv = bias.op.input_tensors[0]
+            # shift = pool.op.input_tensors[0]
+            # clip = shift.op.input_tensors[0]
+            # bias = clip.op.input_tensors[0]
+            conv = pool.op.input_tensors[0]
             conv_vec = conv.op.input_tensors[0]
+            kernel_vec = conv_vec.op.input_tensors[0]
+            data_vec = conv_vec.op.input_tensors[1]
             dorefa = "dorefa" in conv_vec.op.tag
-            _schedule_packed(cfg, s, None, pool, shift, clip, bias, conv, conv_vec, dorefa)
+            _schedule_packed(cfg, s, None, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, dorefa)
         scheduled_ops.append(op)
 
     traverse(outs[0].op)

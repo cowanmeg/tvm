@@ -12,8 +12,6 @@ from topi.nn.pad import pad
 from topi.nn.bitserial_conv2d import bitpack, bitserial_conv2d_nhwc
 from topi.nn.util import get_pad_tuple
 from topi.util import get_const_int, get_const_tuple
-from tvm.autotvm.task.nnvm_integration import deserialize_args
-# from topi.arm_cpu.bitserial_conv2d import _intrin_popcount, fused_conv
 from tvm.contrib import util
 
 input_type='uint16'
@@ -311,10 +309,28 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
                                     pack_inputs=True, pack_outputs=pack_outputs)
         s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
-        # print(tvm.lower(s, [A, W, Round, ClipMin, ClipMax, RShift, B], simple_mode=True))
+        print(tvm.lower(s, [A, W, Round, ClipMin, ClipMax, RShift, B], simple_mode=True))
 
-        a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np = solution(batch, in_size, in_channel, num_filter, kernel, stride, 
-        padding, activation_bits, weight_bits, dorefa, pooling_kernel, pooling_stride, pooling_pad)
+        # a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np = solution(batch, in_size, in_channel, num_filter, kernel, stride, 
+        # padding, activation_bits, weight_bits, dorefa, pooling_kernel, pooling_stride, pooling_pad)
+    a_shape = get_const_tuple(A.shape)
+    w_shape = get_const_tuple(W.shape)
+    def get_ref_data():
+        a_np = generate_quantized_np(get_const_tuple(a_shape), activation_bits, input_type)
+        w_np = generate_quantized_np(get_const_tuple(w_shape), weight_bits, input_type)
+        r_np = np.random.randint(0, 4, size=(num_filter,)).astype(out_dtype)
+        clipmin_np = np.zeros(shape=(num_filter,)).astype(out_dtype)
+        clipmax_np = np.random.randint(250, 255, size=(num_filter,)).astype(out_dtype)
+        shift_np = np.random.randint(0, 4, size=(num_filter,)).astype(out_dtype)
+        if dorefa:
+            w_ = np.copy(w_np).astype(out_dtype)
+            for x in np.nditer(w_, op_flags=['readwrite']):
+                x[...] = 1 if x == 1 else -1
+            b_np = topi.testing.conv2d_nhwc_python(a_np, w_, stride, padding).astype(out_dtype)
+        else:
+            b_np = topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding).astype(out_dtype)
+        return a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np
+    a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np = get_ref_data()
 
     
     target = 'llvm -target=armv7l-none-linux-gnueabihf -mcpu=cortex-a53 -mattr=+neon'
@@ -356,13 +372,13 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
 if __name__ == "__main__":
     # test_bitserial_conv2d(56, 64, 64, 3, 1, (1, 1, 1, 1))
     # test_bitserial_conv2d(56, 64, 64, 3, 1, 'SAME')
-    in_size = 14
-    ic = 512
-    oc = 512
+    in_size = 56
+    ic = 64
+    oc = 64
     k = 3
     stride = 1
     pool_size = [2, 2]
     pool_stride = [2, 2]
     pool_pad = (0, 0, 0, 0)
     verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, 'SAME', 2, 1, True, pool_size, 
-        pool_stride, pool_pad, False)
+        pool_stride, pool_pad, True)

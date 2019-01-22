@@ -7,7 +7,7 @@ from .. import tag
 from .. import generic
 from .bitserial_conv2d import _intrin_popcount
 from topi.util import get_const_tuple, get_const_int
-from tvm.autotvm.task.nnvm_integration import deserialize_args
+from tvm.autotvm.task.topi_integration import deserialize_args
 from ..nn.bitserial_dense import bitserial_dense
 from ..nn.bitserial_conv2d import bitpack # Pull out into a utility function?
 

@@ -6,7 +6,7 @@ from tvm import autotvm
 from .. import tag
 from .. import generic
 from topi.util import get_const_tuple, get_const_int
-from tvm.autotvm.task.nnvm_integration import deserialize_args
+from tvm.autotvm.task.topi_integration import deserialize_args
 
 @autotvm.task.register("topi_x86_bitserial_dense")
 def _topi_bitserial_dense(*args, **kwargs):

@@ -144,6 +144,7 @@ stage('Build') {
           sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_cpp_unittest.sh"
           sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_python_vta.sh"
           sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_rust.sh"
+          sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_golang.sh"
           sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_python_unittest.sh"
           sh "${docker_run} tvmai/ci-cpu ./tests/scripts/task_python_integration.sh"
         }
@@ -214,7 +215,7 @@ stage('Unit Test') {
 stage('Integration Test') {
   parallel 'topi: GPU': {
     node('GPU') {
-      ws('workspace/tvm/it-python-gpu') {
+      ws('workspace/tvm/topi-python-gpu') {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
@@ -224,13 +225,13 @@ stage('Integration Test') {
       }
     }
   },
-  'nnvm: GPU': {
+  'frontend: GPU': {
     node('GPU') {
-      ws('workspace/tvm/it-python-gpu') {
+      ws('workspace/tvm/frontend-python-gpu') {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
-          sh "${docker_run} tvmai/ci-gpu ./tests/scripts/task_python_nnvm.sh"
+          sh "${docker_run} tvmai/ci-gpu ./tests/scripts/task_python_frontend.sh"
         }
       }
     }

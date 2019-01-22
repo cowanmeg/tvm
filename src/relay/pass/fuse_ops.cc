@@ -236,7 +236,11 @@ class IndexedForwardGraph::Creator : private ExprVisitor {
     Node* tuple_node = graph_.node_map.at(op);
     tuple_node->pattern = kInjective;
     for (const Expr& field : op->fields) {
-      this->Update(field, tuple_node, kInjective);
+      if (field->checked_type().as<TensorTypeNode>()) {
+        this->Update(field, tuple_node, kInjective);
+      } else {
+        this->Update(field, nullptr, kOpaque);
+      }
     }
     ExprVisitor::VisitExpr_(op);
     this->AddNode(op);
@@ -536,7 +540,6 @@ class GraphPartitioner {
    * \brief Commit fusion operation.
    * \param src The source node.
    * \param sink The termination node.
-   * \tparam group the group to be committed.
    * \note sink must be a post-dominator of src.
    */
   void CommitFuse(IndexedForwardGraph::Node* src,
@@ -700,9 +703,7 @@ class FuseMutator : private ExprMutator {
   std::unordered_map<GraphPartitioner::Group*, GroupInfo> ginfo_;
   // Skip primitive function.
   Expr VisitExpr_(const FunctionNode* fn_node) {
-    NodeRef res = FunctionGetAttr(GetRef<Function>(fn_node), "Primitive");
-    const ir::IntImm* pval = res.as<ir::IntImm>();
-    if (pval && pval->value != 0) {
+    if (fn_node->IsPrimitive()) {
       return GetRef<Expr>(fn_node);
     } else {
       return ExprMutator::VisitExpr_(fn_node);
@@ -739,8 +740,9 @@ class FuseMutator : private ExprMutator {
     Array<Expr> new_fields = GetNewArguments(tuple->fields, ret_group);
     Tuple new_tuple = TupleNode::make(new_fields);
     if (ret_group == gmap_.at(tuple)) {
-      bool isolated = true;
-      for (size_t i = 0; i < new_fields.size(); ++i) {
+      // This tuple is the root of its group. Check if all fields come from other groups.
+      bool isolated = new_fields.size() == ginfo_[ret_group].params.size();
+      for (size_t i = 0; i < new_fields.size() && isolated; ++i) {
         isolated &= (new_fields[i].same_as(ginfo_[ret_group].params[i]));
       }
       if (isolated) {

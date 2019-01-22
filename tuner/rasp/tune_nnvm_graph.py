@@ -21,7 +21,7 @@ import tvm.contrib.graph_runtime as runtime
 import logging
 logging.getLogger('autotvm').setLevel(logging.DEBUG)
 
-FUSED=False
+FUSED=True
 
 DEFAULT_TRIALS = 10
 target = tvm.target.arm_cpu("rasp3b")
@@ -56,11 +56,11 @@ tuning_option = {
 def measure_best(net, params, dtypes, shapes, output_shape):
      # compile kernels with history best records
     print("Compile...")
-    # with autotvm.apply_history_best(log_file):
-    with nnvm.compiler.build_config(opt_level=3):
-        graph, lib, params = nnvm.compiler.build(
-            net, target=target, target_host=target_host,
-            shape=shapes, params=params, dtype=dtypes)
+    with autotvm.apply_history_best(log_file):
+        with nnvm.compiler.build_config(opt_level=3):
+            graph, lib, params = nnvm.compiler.build(
+              net, target=target, target_host=target_host,
+              shape=shapes, params=params, dtype=dtypes)
 
 
     # export library
@@ -84,7 +84,6 @@ def measure_best(net, params, dtypes, shapes, output_shape):
 
     module.run()
     out =  module.get_output(0, tvm.nd.empty((1, 1000), 'float32', ctx=ctx)).asnumpy()
-    print (out[0:100])
     # evaluate
     print("Evaluate inference time cost...")
     ftimer = module.module.time_evaluator("run", ctx, number=10, repeat=1)
@@ -150,8 +149,7 @@ def tune_and_evaluate(trials, tune):
         print("Tuning...")
         tasks = autotvm.task.extract_from_graph(net, target=target,
                                             shape=shapes, dtype=dtypes,
-                                            symbols=(nnvm.sym.bitserial_conv2d, nnvm.sym.dense))
-
+                                            symbols=(nnvm.sym.bitserial_conv2d, nnvm.sym.bitserial_dense, nnvm.sym.conv2d))
         tune_tasks(tasks, **tuning_option, n_trial=trials)
     # Measure best result
     measure_best(net, params, dtypes, shapes, output_shape)

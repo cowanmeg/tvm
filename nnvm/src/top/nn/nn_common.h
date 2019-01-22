@@ -34,6 +34,12 @@ inline std::vector<std::string> UseBiasListInputNames(const NodeAttrs& attrs) {
   }
 }
 
+template<typename ParamType>
+inline std::vector<std::string> BitserialListInputNames(const NodeAttrs& attrs) {
+  const ParamType& param = nnvm::get<ParamType>(attrs.parsed);
+  return {"data", "weight", "round", "clip_a_min", "clip_a_max", "rshift"};
+}
+
 /*!
  * \brief Convert shape in src_layout to shape in dst_layout
  * \param src original shape

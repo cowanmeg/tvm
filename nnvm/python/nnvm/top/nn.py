@@ -104,7 +104,6 @@ def compute_conv2d(attrs, inputs, _):
         # Temporary band-aid to get rasp working and make it use conv NHWC
         out = topi.nn.conv2d_nhwc(inputs[0], inputs[1], strides, padding, dilation, out_dtype)
     elif groups == 1:
-        print ("Calling this topi conv2d")
         out = topi.nn.conv2d(
             inputs[0], inputs[1], strides, padding, dilation, layout, out_dtype=out_dtype)
     elif layout == "NCHW" and \
@@ -382,21 +381,33 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     channels = attrs.get_int("channels")
     layout = attrs["layout"]
     pack_dtype = attrs['pack_dtype']
-    dorefa = attrs['dorefa']
+    dorefa = attrs.get_bool('dorefa')
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
-    assert layout == "NCHW" or layout == "NHWC"
-    if layout == 'NHWC':
-        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+    pack_inputs = attrs.get_bool('pack_inputs')
+    pack_outputs = attrs.get_bool('pack_outputs')
+    use_pool = attrs.get_bool('use_pool')
+    if use_pool:
+        pool_size = attrs.get_int_tuple('pool_size')
     else:
-        out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+        pool_size = None
+    pool_strides = attrs.get_int_tuple('pool_strides')
+    pool_padding = attrs.get_int_tuple('pool_padding')
+    assert layout == "NCHW" or layout == "NHWC"
+    if layout == 'NHWC' and (pack_outputs or use_pool):
+        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5],
+                    strides, padding, activation_bits, weight_bits, 
+                    pool_size=pool_size, pool_stride=pool_strides, pool_pad=pool_padding,
+                    pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa, pack_inputs=pack_inputs, pack_outputs=pack_outputs)
+    elif layout == 'NHWC':
+        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], None, None, None, None, 
+                    strides, padding, activation_bits, 
+                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+    else: # NCHW
+        out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, 
+                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
 
-    if attrs.get_bool("use_bias"):
-        bias = inputs[2]
-        expand_axis = 1 if layout == "NCHW" else 0
-        bias = topi.expand_dims(bias, axis=expand_axis, num_newaxis=2)
-        out = topi.broadcast_add(out, bias)
     return out
 
 @reg.register_schedule("bitserial_conv2d")
@@ -420,7 +431,7 @@ def compute_btiserial_dense(attrs, inputs, _):
     weight_bits = attrs.get_int("weight_bits")
     pack_dtype = attrs['pack_dtype']
     out_dtype = attrs["out_dtype"]
-    dorefa = attrs['dorefa']
+    dorefa = attrs.get_bool('dorefa')
     # if attrs.get_bool("use_bias"):
     #     return topi.nn.bitserial_dense(inputs[0], inputs[1], bias=inputs[2])
     return topi.nn.bitserial_dense(inputs[0], inputs[1], activation_bits,

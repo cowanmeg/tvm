@@ -84,7 +84,7 @@ def verify_bitserial_conv2d_nchw(batch, in_size, in_channel, num_filter, kernel,
         return a_np, w_np, b_np
     a_np, w_np, b_np = get_ref_data()
 
-    remote = autotvm.measure.request_remote("rasp3b", 'localhost', 9190, timeout=10)
+    remote = autotvm.measure.request_remote("rasp3b", 'fleet', 9190, timeout=10)
     ctx = remote.context(str(target), 0)
     a = tvm.nd.array(a_np, ctx)
     w = tvm.nd.array(w_np, ctx)
@@ -130,7 +130,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
             b_np = topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding).astype(out_dtype)
         return a_np, w_np, b_np
     a_np, w_np, b_np = get_ref_data()
-    remote = autotvm.measure.request_remote("rasp3b", 'localhost', 9190, timeout=10)
+    remote = autotvm.measure.request_remote("rpi3b", 'fleet', 9190, timeout=5)
     ctx = remote.context(str(target), 0)
     a = tvm.nd.array(a_np, ctx)
     w = tvm.nd.array(w_np, ctx)
@@ -147,6 +147,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
 
     func(a, w, b)
     np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
+    print (b)
 
 def tune_tasks(tsk,
                measure_option,
@@ -243,4 +244,4 @@ if __name__ == "__main__":
         trials = int(sys.argv[1])
     else:
         trials = DEFAULT_TRIALS
-    test_bitserial_conv2d(56, 64, 64, 3, 1, 'SAME', trials)
+    test_bitserial_conv2d(56, 96, 256, 3, 1, 'SAME', trials)

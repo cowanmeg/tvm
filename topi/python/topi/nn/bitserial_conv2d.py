@@ -4,6 +4,7 @@ from __future__ import absolute_import as _abs
 from collections import namedtuple
 import numpy as np
 import tvm
+import topi
 from tvm import autotvm
 from topi.transform import concatenate
 from .pad import pad
@@ -20,28 +21,6 @@ SpatialPackNCHW = namedtuple('SpatialPack',
 
 SpatialPackNHWC = namedtuple('SpatialPack',
                              ['vh', 'vw', 'vc', 'ba', 'bc'])
-
-# _WORKLOADS = [
-#     # workloads of resnet18 on imagenet
-#     # input_size, input_size, ic, oc, kh, kw, pad, pad, stride, stride
-#     Workload('uint32', 'int32', 56, 56, 64, 64, 3, 3, 1, 1, 1, 1),
-#     Workload('uint32', 'int32', 56, 56, 64, 64, 1, 1, 0, 0, 1, 1),
-#     Workload('uint32', 'int32', 56, 56, 64, 128, 3, 3, 1, 1, 2, 2),
-#     Workload('uint32', 'int32', 56, 56, 64, 128, 1, 1, 0, 0, 2, 2),
-#     Workload('uint32', 'int32', 28, 28, 128, 128, 3, 3, 1, 1, 1, 1),
-#     Workload('uint32', 'int32', 28, 28, 128, 256, 3, 3, 1, 1, 2, 2),
-#     Workload('uint32', 'int32', 28, 28, 128, 256, 1, 1, 0, 0, 2, 2),
-#     Workload('uint32', 'int32', 14, 14, 256, 256, 3, 3, 1, 1, 1, 1),
-#     Workload('uint32', 'int32', 14, 14, 256, 512, 3, 3, 1, 1, 2, 2),
-#     Workload('uint32', 'int32', 14, 14, 256, 512, 1, 1, 0, 0, 2, 2),
-#     Workload('uint32', 'int32', 7, 7, 512, 512, 3, 3, 1, 1, 1, 1),
-
-#     # workload of alexnet on cifar10
-#     Workload('int32', 'int32', 27, 27, 96, 192, 5, 5, 2, 2, 1, 1),
-#     Workload('int32', 'int32', 13, 13, 192, 384, 3, 3, 1, 1, 1, 1),
-#     Workload('int32', 'int32', 13, 13, 384, 384, 3, 3, 1, 1, 1, 1),
-#     Workload('int32', 'int32', 13, 13, 384, 256, 3, 3, 1, 1, 1, 1),
-# ]
 
 @tvm.target.generic_func
 def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight_bits,
@@ -123,8 +102,11 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
         name="Conv2dOutput", tag="bitserial_conv2d_nchw")
 
 @tvm.target.generic_func
-def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight_bits,
-                          pack_dtype, out_dtype, dorefa):
+def bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
+                          stride, padding, activation_bits, weight_bits,
+                          pack_dtype, out_dtype, dorefa, 
+                          pool_size=None, pool_stride=None, pool_pad=None,
+                          pack_inputs=True, pack_outputs=False):
     """Bitserial Conv2D operator.
 
     Parameters
@@ -165,7 +147,10 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
                        [batch, out_height, out_width, out_channel]
     """
     assert isinstance(stride, int) or len(stride) == 2
-    Input_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
+    if pack_inputs:
+        Input_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
+    else:
+        Input_q = data
     if len(kernel.shape) == 4:
         Filter_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
         kernel_h, kernel_w, _, num_filter, _ = get_const_tuple(Filter_q.shape)
@@ -199,38 +184,21 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
             Filter_q[ry, rx, rc, ff, b2]) << b1b2).astype(out_dtype),
                        axis=[rc, ry, rx, b2, b1])
 
-    return tvm.compute((batch, out_height, out_width, out_channel), _conv,
+    conv = tvm.compute((batch, out_height, out_width, out_channel), _conv,
         name="Conv2dOutput", tag="bitserial_conv2d_nhwc")
 
+    if pool_size is None:
+        pooled = conv
+    else:
+        pooled = topi.nn.pool(conv, kernel=pool_size, stride=pool_stride, padding=pool_pad, 
+            pool_type='max', layout='NHWC')
+    
+    if pack_outputs:
+        output = bitpack(pooled, activation_bits, pack_axis=3, bit_axis=3, pack_type=pack_dtype)
+    else:
+        output = pooled
+    return output
 
-# def _get_workload(data, kernel, stride, padding, out_dtype, layout):
-#     """ Get the workload structure. """
-#     assert layout == "NCHW" or layout == "NHWC", \
-#         "Only support layouts NCHW and NHWC"
-#     if layout == "NCHW":
-#         _, CI, IH, IW = [x.value for x in data.shape]
-#         CO, _, KH, KW = [x.value for x in kernel.shape]
-#     else: # NHWC
-#         IH, IW = data.shape[1].value, data.shape[2].value
-#         KH, KW, CI, CO = [x for x in get_const_tuple(kernel.shape)]
-
-#     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
-#     if isinstance(stride, (tuple, list)):
-#         HSTR, WSTR = stride
-#     else:
-#         HSTR, WSTR = stride, stride
-
-#     return Workload(data.dtype, out_dtype, IH, IW, CI, CO, KH, KW, HPAD, WPAD, HSTR, WSTR)
-
-# @tvm.target.generic_func
-# def _get_schedule(wkl, layout):
-#     # pylint: disable=unreachable
-#     """ Get the platform specific schedule. """
-#     target = tvm.target.current_target()
-#     raise RuntimeError(
-#         "No schedule for current target:{}".format(target))
-#     # This return has no use, merely to supress pylint warning
-#     return wkl
 
 @autotvm.register_topi_compute(bitserial_conv2d_nchw, ['cpu', 'arm_cpu'], 'direct')
 def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
@@ -476,23 +444,25 @@ def bitpack(data, bits, pack_axis, bit_axis, pack_type, name="QuantizeInput"):
 
     # pack axis shifts if bit axis comes before
     if bit_axis <= pack_axis:
-        pack_axis += 1
+        old_pack_axis = pack_axis + 1
+    else:
+        old_pack_axis = pack_axis
 
     def _bitpack(*indices):
         packed_data = [tvm.const(0, pack_type)] * bits
-        for k in range(data_width):
-            # Translate indices for packed data back to original
-            idx = [0] * n
-            j = 0
-            for i in range(n+1):
-                if i == bit_axis:
-                    continue
-                elif i == pack_axis:
-                    idx[j] = indices[i] * data_width + k
-                else:
-                    idx[j] = indices[i]
-                j += 1
+        idx = [0] * n
+        j = 0
+        for i in range(n+1):
+            if i == bit_axis:
+                continue
+            elif i == old_pack_axis:
+                idx[j] = indices[i] * data_width
+            else:
+                idx[j] = indices[i]
+            j += 1
 
+        for k in range(data_width):
+             # Translate indices for packed data back to original
             element = data(*idx)
             for b in range(bits):
                 extracted_bit = ((element & tvm.const(masks[b])) >> b).astype(pack_type)
@@ -502,6 +472,7 @@ def bitpack(data, bits, pack_axis, bit_axis, pack_type, name="QuantizeInput"):
 
             if k == data_width - 1:
                 return tuple(packed_data)
+            idx[pack_axis] += 1
         return tuple(packed_data)
 
     output_tuple = tvm.compute(bitserial_oshape, _bitpack, name=name, tag='bitpack')
@@ -509,6 +480,8 @@ def bitpack(data, bits, pack_axis, bit_axis, pack_type, name="QuantizeInput"):
     if bits > 1:
         return concatenate(output_tuple, axis=bit_axis)
     return output_tuple
+
+    
 
 _SCH_TO_DECL_FUNC_QUANT = {
     SpatialPackNCHW: spatial_pack_nchw,

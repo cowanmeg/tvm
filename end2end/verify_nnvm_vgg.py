@@ -1,3 +1,6 @@
+"""Conversion script from Tensorflow to NNVM model for 2-bit, 1-bit VGGNet
+"""
+
 import numpy as np
 import os
 import sys
@@ -236,7 +239,8 @@ def load_parameter(stop_layer=None):
         if stop_layer == layer.name:
             break
 
-
+    for k, v in params.items():
+        print (k, v.shape)
     return params, dtypes
 
 def load_layers(stop_layer=None):
@@ -256,7 +260,7 @@ def load_layers(stop_layer=None):
                 bit_axis = -1
             network = sym.bitserial_conv2d(data=network, kernel_size=layer.kernel_size, channels=layer.filters,
                             padding=padding, strides=layer.strides,
-                            layout=layout, kernel_layout=kernel_layout, use_bias=False, 
+                            layout=layout, kernel_layout=kernel_layout, use_pool=False,
                             activation_bits=abits, weight_bits=wbits, pack_dtype='uint8',
                             out_dtype='int16', bit_axis=bit_axis, name=layer.name)
             # Scaling back down to quantized data
@@ -266,15 +270,16 @@ def load_layers(stop_layer=None):
             network = network + r
             network = sym.clip_channelwise(network, axis=3, name=layer.name+'clip')
             network = sym.right_shift_channelwise(network, axis=3, name=layer.name+'shift')
-            print('network = sym.bitserial_conv2d(data=network, kernel_size=%s, channels=%d, ' \
-                  'padding=%s, strides=%s, '\
-                  'layout=layout, kernel_layout=kernel_layout, use_bias=False, ' \
-                  'activation_bits=abits, weight_bits=wbits, pack_dtype=\'uint8\', ' \
-                  'out_dtype=\'int16\', bit_axis=bit_axis, name=\'%s\')' % (layer.kernel_size, layer.filters, padding, layer.strides, layer.name))
-            print('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
-            print ('network = network + r')
-            print ('sym.clip_channelwise(network, axis=3, name=\'%s\' +\'clip\')' % layer.name)
-            print ('network = sym.right_shift_channelwise(network, axis=3, name= \'%s\'+\'shift\')' % layer.name)
+            if save:
+                print('network = sym.bitserial_conv2d(data=network, ' \
+                    'kernel_size=%s, channels=%d, padding=%s, strides=%s, '\
+                    'layout=layout, kernel_layout=kernel_layout, use_pool=False, ' \
+                    'activation_bits=abits, weight_bits=wbits, pack_dtype=\'uint8\', ' \
+                    'out_dtype=\'int16\', bit_axis=bit_axis, name=\'%s\')' % (layer.kernel_size, layer.filters, padding, layer.strides, layer.name))
+                print('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
+                print ('network = network + r')
+                print ('sym.clip_channelwise(network, axis=3, name=\'%s\' +\'clip\')' % layer.name)
+                print ('network = sym.right_shift_channelwise(network, axis=3, name= \'%s\'+\'shift\')' % layer.name)
         elif 'conv2d' in layer.name:
             # This is the first layer - compute in NCHW
             channels = layer.filters
@@ -286,14 +291,17 @@ def load_layers(stop_layer=None):
                 padding = (0, 0)
             network = sym.conv2d(data=network, channels=channels, kernel_size=kernel_size, strides=strides, padding=padding, 
                         layout=layout, kernel_layout=kernel_layout, use_bias=layer.use_bias, name=layer.name)
-            print ('network = sym.conv2d(data=network, channels=%d, kernel_size=%s, strides=%s, padding=%s,\
-             layout=layout, kernel_layout=kernel_layout, use_bias=%s, name=\'%s\')' % (channels, kernel_size, strides, padding, layer.use_bias, layer.name))
+            if save:
+                print ('network = sym.conv2d(data=network, channels=%d, kernel_size=%s, strides=%s, padding=%s,\
+                layout=layout, kernel_layout=kernel_layout, use_bias=%s, name=\'%s\')' % (channels, kernel_size, strides, padding, layer.use_bias, layer.name))
         elif 'average_pooling2d' in layer.name:
             network = sym.global_avg_pool2d(network, name=layer.name, layout=layout)
-            print ('network = sym.global_avg_pool2d(network, name=\'%s\', layout=layout)' % layer.name)
+            if save:
+                print ('network = sym.global_avg_pool2d(network, name=\'%s\', layout=layout)' % layer.name)
         elif 'max_pooling2d' in layer.name:
             network = sym.max_pool2d(network, name=layer.name, layout=layout, pool_size=layer.pool_size, padding=(0, 0), strides=layer.strides)
-            print ('network = sym.max_pool2d(network, name=\'%s\', layout=layout, pool_size=%s, padding=(0, 0), strides=%s)' % (layer.name, layer.pool_size, layer.strides))
+            if save:
+                print ('network = sym.max_pool2d(network, name=\'%s\', layout=layout, pool_size=%s, padding=(0, 0), strides=%s)' % (layer.name, layer.pool_size, layer.strides))
         elif 'binary_dense' in layer.name:
             network = sym.flatten(data=network)
             network = sym.bitserial_dense(data=network, units=layer.units, activation_bits=abits, weight_bits=wbits,
@@ -305,44 +313,43 @@ def load_layers(stop_layer=None):
             # TODO: temp to get this working
             network = sym.clip_channelwise(network, axis=0, name=layer.name+'clip')
             network = sym.right_shift_channelwise(network, axis=0, name=layer.name+'shift')
-            print ('network = sym.flatten(data=network)')
-            print ('network = sym.bitserial_dense(data=network, units=%d, activation_bits=abits, weight_bits=wbits, ' \
-                   'pack_dtype=\'uint8\', out_dtype=\'int16\', name=\'%s\')' % (layer.units, layer.name))
-            print ('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
-            print ('network = network + r')
-            print ('network = sym.clip_channelwise(network, axis=0, name=\'%s\'+\'clip\')' % layer.name)
-            print ('network = sym.right_shift_channelwise(network, axis=0, name=\'%s\'+\'shift\')' % layer.name)
+            if save:
+                print ('network = sym.flatten(data=network)')
+                print ('network = sym.bitserial_dense(data=network, units=%d, activation_bits=abits, weight_bits=wbits, ' \
+                    'pack_dtype=\'uint8\', out_dtype=\'int16\', name=\'%s\')' % (layer.units, layer.name))
+                print ('r = sym.Variable(\'%sround\', shape=%s)' % (layer.name, layer.output_shape))
+                print ('network = network + r')
+                print ('network = sym.clip_channelwise(network, axis=0, name=\'%s\'+\'clip\')' % layer.name)
+                print ('network = sym.right_shift_channelwise(network, axis=0, name=\'%s\'+\'shift\')' % layer.name)
         elif 'scale' in layer.name:
             network = network * layer.scale
             # Quantize
             network = sym.clip(data=network, a_min=0.0, a_max=1.0)
             data = network * ((1 << abits) - 1) + 0.5
             network = sym.cast(data=data, dtype='int16')
-            print ('network = network * %d' % layer.scale)
-            print ('network = sym.clip(data=network, a_min=0.0, a_max=1.0)')
-            print ('data = network * ((1 << abits) - 1) + 0.5')
-            print ('network = sym.cast(data=data, dtype=\'int16\')')
+            if save:
+                print ('network = network * %d' % layer.scale)
+                print ('network = sym.clip(data=network, a_min=0.0, a_max=1.0)')
+                print ('data = network * ((1 << abits) - 1) + 0.5')
+                print ('network = sym.cast(data=data, dtype=\'int16\')')
         elif 'scalu' in layer.name:
             scale = sym.Variable(layer.name, shape=layer.input_shape)
             network = sym.cast(data=network, dtype='float32')
             network = network * scale
-            print ('scale = sym.Variable(\'%s\', shape=%s)' % (layer.name, layer.input_shape))
-            print ('network = sym.cast(data=network, dtype=\'float32\')')
-            print ('network = network * scale')
-        elif 'max_pooling2d' in layer.name:
-            network = sym.max_pool2d(data=network, pool_size=layer.pool_size, 
-                strides=layer.strides, name=layer.name, layout=layout)
-            print ('network = sym.max_pool2d(data=network, pool_size=%s, ' \
-                   'strides=%s, name=\'%s\', layout=layout)' % (layer.pool_size, layer.srides, layer.name))
+            if save:
+                print ('scale = sym.Variable(\'%s\', shape=%s)' % (layer.name, layer.input_shape))
+                print ('network = sym.cast(data=network, dtype=\'float32\')')
+                print ('network = network * scale')
         elif 'batch_normalization' in layer.name:
             # Currently NNVM doesn't support NHWC batch norm - computing it from the components
             moving_mean, moving_var = get_numpy(sess, layer.weights)
             scale = sym.Variable(layer.name + '_scale', shape=moving_var.shape)
             shift = sym.Variable(layer.name + '_shift', shape=moving_mean.shape)
             network = sym.broadcast_add(sym.broadcast_mul(network, scale), shift)
-            print ('scale = sym.Variable(\'%s_scale\', shape=%s)' % (layer.name, moving_var.shape))
-            print ('shift = sym.Variable(\'%s_shift\', shape=%s)' % (layer.name, moving_mean.shape))
-            print('network = sym.broadcast_add(sym.broadcast_mul(network, scale), shift)')
+            if save:
+                print ('scale = sym.Variable(\'%s_scale\', shape=%s)' % (layer.name, moving_var.shape))
+                print ('shift = sym.Variable(\'%s_shift\', shape=%s)' % (layer.name, moving_mean.shape))
+                print('network = sym.broadcast_add(sym.broadcast_mul(network, scale), shift)')
 
         if stop_layer == layer.name:
             global output_shape
@@ -353,8 +360,6 @@ def load_layers(stop_layer=None):
             else:
                 output_dtype = 'int16'
             break
-
-    print (network)
     return network
   
 
@@ -413,7 +418,6 @@ def build_network(stop_layer=None):
     # print (graph.json())
     graph_json = json.loads(graph.json())
     graph_index = GraphIndex(graph)
-    pickle.dump(dtypes, open(os.path.join(directory, "vggnet_dtypes.p"), 'wb'))
 
     if save:
         pickle.dump(dtypes, open(os.path.join(directory, "vggnet_dtypes.p"), 'wb'))

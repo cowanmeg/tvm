@@ -8,23 +8,20 @@ from tvm import autotvm
 from .. import tag
 from ..nn.pad import pad
 from ..nn.bitserial_conv2d import bitpack, bitserial_conv2d_nhwc
-# from ..nn.bitserial_conv2d import SpatialPackNCHW, _WORKLOADS, spatial_pack_nchw
 from ..nn.util import get_pad_tuple
 from ..util import get_const_int, get_const_tuple
 from .. import generic
 from tvm.autotvm.task.nnvm_integration import deserialize_args
 
-RaspSpatialPack = namedtuple('SpatialPack',
-                             ['vh', 'vw', 'vc', 'ba', 'bc', 'split_ci', 'kfactor'])
 
 @autotvm.task.register("topi_nn_bitserial_conv2d_nhwc")
 def _topi_bitserial_conv2d(*args, **kwargs):
     args = deserialize_args(args)
     C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
     s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
-    data = args[0]
-    kernel = args[1]
-    return s, [data, kernel, C]
+    data, kernel, bias, clip_min, clip_max, rshift = args[:6]
+
+    return s, [data, kernel, bias, clip_min, clip_max, rshift, C]
 
 # @_get_schedule.register("arm_cpu")
 def _get_schedule_bitserial_conv2d(wkl, layout):
@@ -47,16 +44,21 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
-# TODO: pad IC of weights!!
 @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
-def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits, 
-                      pack_dtype, out_dtype, dorefa, shift=None):
+def spatial_pack_nhwc(cfg, data, kernel, bias, clip_min, clip_max, rshift,
+                      stride, padding, activation_bits, weight_bits, 
+                      pack_dtype, out_dtype, dorefa, 
+                      pool_size, pool_stride, pool_pad,
+                      pack_inputs=True, pack_outputs=False):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into 8 bits"
-
-    
-    N, H, W, CI = get_const_tuple(data.shape)
+    print (data, kernel, bias, clip_min, clip_max, rshift)
+    if pack_inputs:
+        N, H, W, CI = get_const_tuple(data.shape)
+    else:
+        N, H, W, _, CI_packed = get_const_tuple(data.shape)
+        CI = CI_packed * 8
     if len(kernel.shape) == 4:
         KH, KW, _, CO = get_const_tuple(kernel.shape)
         CI_packed = CI // 8
@@ -85,7 +87,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     else:
         CI_PAD = 0
 
-
     # ==================== define configuration space ====================
     n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
     ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
@@ -93,11 +94,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
 
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
                        filter=lambda x: x.size[-1] == 8)
-    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
-                       filter=lambda x: max(x.size[1:]) <= 16)
-    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
-                       filter=lambda x: max(x.size[1:]) <= 16)
-    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2)
+    # cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2, 
                                  filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
     re_axes = cfg.define_reorder("reorder_0",
@@ -117,10 +116,16 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
 
-    data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
+    if pack_inputs:
+        data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
+    else:
+        data_q = data
     kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, len(kernel.shape) == 4)
+    if kernel_vec.shape[-1] % 8 != 0 and CI_PAD != 0:
+        kernel_vec = pad(kernel_vec, [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, CI_PAD])
+    
     N, H, W, IB, CI = data_q.shape
-    OCO, KH, KW, KB, VC, _ = kernel_vec.shape
+    OCO, KH, KW, KB, VC, CI = kernel_vec.shape
 
     dvshape = (N, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
@@ -132,9 +137,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     else:
         data_pad = data_q
 
+
     data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, b, ci: \
         data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][b][ci], name='data_vec')
-
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')
     dw = tvm.reduce_axis((0, KW), name='dw')
@@ -154,15 +159,54 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
             data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci]).astype('int16'))
                         << (kb + ib).astype('int16'), axis=[dh, dw, kb, ib, ci])
     if dorefa:
-        conv = tvm.compute(ovshape, _dorefa_conv, name='conv', tag='dorefa')
+        conv_vec = tvm.compute(ovshape, _dorefa_conv, name='conv_vec', tag='dorefa')
     else:
-        conv = tvm.compute(ovshape, _conv, name='conv')
+        conv_vec = tvm.compute(ovshape, _conv, name='conv_vec')
 
 
-    return tvm.compute(oshape, lambda n, h, w, co:
-                       conv[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
-                       name='output_vec', tag='spatial_bitserial_conv_nhwc')
+    conv =  tvm.compute(oshape, lambda n, h, w, co:
+                       conv_vec[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC].astype(out_dtype),
+                       name='conv', tag='spatial_bitserial_conv_nhwc')
 
+    if not pack_outputs and pool_size is None:
+        return conv
+
+    conv_bias = conv + bias
+    conv_clip = topi.clip_channelwise(conv_bias, clip_min, clip_max, axis=3)
+    conv_shift = topi.right_shift_channelwise(conv_clip, rshift, axis=3)
+
+    if pool_size is None:
+        pooled = conv_shift
+    else:
+        pooled = topi.nn.pool(conv_shift, kernel=pool_size,
+            stride=pool_stride, padding=pool_pad, pool_type='max', layout='NHWC')
+
+    # For some reason this is much faster?
+    import numpy as np
+    masks = np.array([0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80])
+    def _bitpack(nn, yy, xx, bb, ff):
+        packed_data = tvm.const(0, pack_dtype)
+        data_width = 8
+        mask = tvm.select(bb==0, 0x1, 0x2)
+        for k in range(data_width):
+            f = ff * data_width + k
+            element = pooled[nn, yy, xx, f]
+            extracted_bit = ((element & mask) >> bb).astype(pack_dtype)
+            packed_data = (packed_data | extracted_bit)
+            if k < data_width - 1:
+                packed_data = packed_data << 1
+        return packed_data
+
+
+    if pack_outputs:
+        n, h, w, c = get_const_tuple(pooled.shape)
+        output = tvm.compute((n, h, w, activation_bits, c//8), _bitpack, name='BitpackedConv')
+    else:
+        output = pooled
+
+    return output
+
+    
 def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
     dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=dtype, name='w')
@@ -187,6 +231,10 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
                          name="X",
                          offset_factor=k_i,
                          strides=[tvm.var('ldw'), 1])
+    Zb = tvm.decl_buffer(z.shape, z.dtype,
+                         name="Z",
+                         offset_factor=1,
+                         strides=[1])
 
     def _intrin_func(ins, outs):
         ww, xx = ins
@@ -263,50 +311,36 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
         # body, reset, update
         return _instr(0), _instr(1), _instr(2)
     with tvm.build_config(offset_factor=1, partition_const_loop=True):
-        return tvm.decl_tensor_intrin(z.op, _intrin_func, binds={w: Wb, x:Xb})
+        return tvm.decl_tensor_intrin(z.op, _intrin_func, binds={w: Wb, x:Xb, z:Zb})
 
 # ARM specific schedule that using custom microkernel
-def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
+def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
                                   kernel_q, kernel_vec,
                                   conv_out, output, last, dorefa):
     # no stride and padding info here
     _, H, W, IB, CI = data_q.shape
-    KH, KW, KB, _, CO = kernel_q.shape
-    KB = get_const_int(KB)
+    # KH, KW, KB, _, CO = kernel_q.shape
+    # KB = get_const_int(KB)
+    KB = get_const_int(1)
     IB = get_const_int(IB)
 
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
-
     ##### Schedule data packing
     if data_pad is not None:
         s[data_pad].compute_inline()
 
     _, h, _, _, _, _, _ = s[data_vec].op.axis
-    cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
-    oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
-    if cfg["tile_ah"].size[1] == 1:
-        oaxis = oh
-        paxis = oh
-    else:
-        oaxis = oh
-        paxis = ih
-
-    s[data_vec].parallel(paxis)
+    # cfg.define_split("tile_ah", cfg.axis(h), policy="all", num_outputs=2, max_factor=32)
+    # oh, ih = cfg["tile_ah"].apply(s, data_vec, h)
+    s[data_vec].parallel(h)
 
     #### Schedule kernel packing
     co, _, _, _, _, _ = s[kernel_vec].op.axis
-    cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
-    oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
-    if cfg["tile_bco"].size[1] == 1:
-        oaxis = oco
-        paxis = oco
-    else:
-        oaxis = oco
-        paxis = ico
-
-    s[kernel_vec].parallel(paxis)
+    # cfg.define_split("tile_bco", cfg.axis(co), policy="all", num_outputs=2, max_factor=32)
+    # oco, ico = cfg["tile_bco"].apply(s, kernel_vec, co)
+    s[kernel_vec].parallel(co)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
@@ -315,30 +349,98 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
     ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
     re_axes = cfg["reorder_0"].apply(s, conv_out, [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
     
+    # Use microkernel
     kfactor = cfg['tile_ci'].size[1]
-    pc = _intrin_popcount(VC, kfactor, KB, IB, dorefa)
-    s[conv_out].tensorize(kb, pc)  
+    if kfactor % 8 == 0:
+        pc = _intrin_popcount(VC, kfactor, KB, IB, dorefa)
+        s[conv_out].tensorize(kb, pc)  
 
     n, h, w, co = s[last].op.axis
-    co, vc = s[last].split(co, VC)
-    oh, ow, vh, vw = s[last].tile(h, w, VH, VW)
-    s[last].reorder(n, oh, ow, co, vc, vh, vw)
-    s[last].vectorize(vw)
+    co, vc = cfg['tile_co'].apply(s, last, co)
+    oh, vh = cfg['tile_oh'].apply(s, last, h)
+    ow, vw = cfg['tile_ow'].apply(s, last, w)
+    s[last].reorder(n, oh, ow, co, vh, vw, vc) # TODO: Is this the reorder we want
+    s[last].vectorize(vc)
     if last != output:
         s[last].compute_inline()
 
-    oho, iho = cfg["tile_oh"].apply(s, last, oh)  # reuse parameter
-    s[conv_out].compute_at(s[last], ow)
-    if cfg["tile_oh"].size[1] == 1:
-        oaxis = oho
-        paxis = oho
-    else:
-        oaxis = oho
-        paxis = iho
-
-    s[last].parallel(paxis)
+    # oho, iho = cfg["tile_oh"].apply(s, last, oh)  # reuse parameter
+    s[conv_out].compute_at(s[last], co)
+    s[last].parallel(oh)
     s = s.normalize()
     return s
+
+def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, dorefa):
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+    KB = 1
+    IB = 2
+
+    ##### Schedule Convolution
+    n, oh, ow, co, vh, vw, vc = s[conv_vec].op.axis
+    kh, kw, kb, ib, ci = s[conv_vec].op.reduce_axis
+
+    ci_o, ci_i = cfg['tile_ci'].apply(s, conv_vec, ci)
+    re_axes = cfg["reorder_0"].apply(s, conv_vec, 
+        [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
+    
+    kfactor = cfg['tile_ci'].size[1]
+    pc = _intrin_popcount(VC, kfactor, KB, IB, dorefa)
+    s[conv_vec].tensorize(kb, pc)  
+
+    n, h, w, co = s[conv].op.axis
+    co, vc = s[conv].split(co, VC)
+    oh, ow, vh, vw = s[conv].tile(h, w, VH, VW)
+    s[conv].reorder(n, oh, ow, co, vh, vw, vc)
+    s[conv_vec].compute_at(s[conv], co)
+    s[conv].vectorize(vc)
+
+    # Schedule bias, clip, etc. 
+    n, h, w, co = s[bias].op.axis
+    co, vc = s[bias].split(co, VC)
+    oh, ow, vh, vw = s[bias].tile(h, w, VH, VW)
+    s[bias].reorder(n, oh, ow, co, vh, vw, vc)
+    s[conv].compute_at(s[bias], vw)
+    s[bias].vectorize(vc)
+
+    n, h, w, co = s[clip].op.axis
+    co, vc = s[clip].split(co, VC)
+    oh, ow, vh, vw = s[clip].tile(h, w, VH, VW)
+    s[clip].reorder(n, oh, ow, co, vh, vw, vc)
+    s[bias].compute_at(s[clip], vw)
+    s[clip].vectorize(vc)
+
+    n, h, w, co = s[shift].op.axis
+    co, vc = s[shift].split(co, VC)
+    oh, ow, vh, vw = s[shift].tile(h, w, VH, VW)
+    s[shift].reorder(n, oh, ow, co, vh, vw, vc)
+    s[clip].compute_at(s[shift], vw)
+    s[shift].vectorize(vc)
+
+
+    if pool is None:
+        n, oh, ow, b, co = s[output].op.axis
+        s[shift].compute_at(s[output], ow)
+    else:
+        n, h, w, co = s[pool].op.axis
+        co, vc = s[pool].split(co, VC)
+        oh, ow, vh, vw = s[pool].tile(h, w, VH, VW)
+        s[pool].reorder(n, oh, ow, co, vh, vw, vc)
+        s[shift].compute_at(s[pool], vw)
+        s[pool].vectorize(vc)
+        if output is None:
+            output = pool
+        else:
+            n, oh, ow, b, co = s[output].op.axis
+            s[pool].compute_at(s[output], ow)
+    
+    fused = s[output].fuse(n, oh)
+    s[output].parallel(fused)
+
+    s = s.normalize()
+    return s
+
 
 # @generic.schedule_bitserial_conv2d_nhwc.register(["arm_cpu"])
 @autotvm.register_topi_schedule(generic.nn.schedule_bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
@@ -356,15 +458,12 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
                 if tensor.op.input_tensors and tensor.op not in scheduled_ops:
                     traverse(tensor.op)
 
+
         if 'spatial_bitserial_conv_nhwc' in op.tag:
             output = op.output(0)
             conv_out = op.input_tensors[0]
             kernel_vec = conv_out.op.input_tensors[0]
             kernel_q = kernel_vec.op.input_tensors[0]
-            # kernel = kernel_q.op.input_tensors[0]
-            # if "QuantizeInput" in kernel.op.name:
-            #     # Need to go up 1 further, from the combine in bitpack
-            #     kernel = kernel.op.input_tensors[0]
             data_vec = conv_out.op.input_tensors[1]
             data_q = data_vec.op.input_tensors[0]
             data = data_q.op.input_tensors[0]
@@ -372,14 +471,36 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             if isinstance(data_q.op, tvm.tensor.ComputeOp) and "pad" in data_q.op.tag:
                 data_pad = data_q
                 data_q = data
-                data = data_q.op.input_tensors[0]
-            if "QuantizeInput" in data.op.name:
-                # Need to go up 1 further, from the combine in bitpack
                 data = data.op.input_tensors[0]
             dorefa = "dorefa" in conv_out.op.tag
-            _schedule_spatial_conv2d_nhwc(cfg, s, data, data_q, data_pad, data_vec,
+            _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
                                           kernel_q, kernel_vec, conv_out, output, outs[0], dorefa)
+        elif 'BitpackedConv' in op.name:
+            bitpacked_output = op.output(0)
+            shift = bitpacked_output.op.input_tensors[0]
+            if 'pool' in shift.op.tag:
+                pool = shift
+                shift = pool.op.input_tensors[0]
+            else:
+                pool = None
+            clip = shift.op.input_tensors[0]
+            bias = clip.op.input_tensors[0]
+            conv = bias.op.input_tensors[0]
+            conv_vec = conv.op.input_tensors[0]
+            dorefa = "dorefa" in conv_vec.op.tag
+            _schedule_packed(cfg, s, bitpacked_output, pool, shift, clip, bias, conv, conv_vec, dorefa)
+
+        elif 'pool' in op.tag:
+            pool = op.output(0)
+            shift = pool.op.input_tensors[0]
+            clip = shift.op.input_tensors[0]
+            bias = clip.op.input_tensors[0]
+            conv = bias.op.input_tensors[0]
+            conv_vec = conv.op.input_tensors[0]
+            dorefa = "dorefa" in conv_vec.op.tag
+            _schedule_packed(cfg, s, None, pool, shift, clip, bias, conv, conv_vec, dorefa)
         scheduled_ops.append(op)
 
     traverse(outs[0].op)
     return s
+

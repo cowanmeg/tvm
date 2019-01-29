@@ -48,68 +48,68 @@ def get_network():
     data = network * ((1 << abits) - 1) + 0.5
     network = sym.cast(data=data, dtype='int16')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=256, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d')
-    r = sym.Variable('binary_conv2dround', shape=(1, 56, 56, 256))
+    r = sym.Variable('binary_conv2dround', shape=(256, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=256, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_1')
-    r = sym.Variable('binary_conv2d_1round', shape=(1, 56, 56, 256))
+    r = sym.Variable('binary_conv2d_1round', shape=(256, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_1' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_1'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=256, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_2')
-    r = sym.Variable('binary_conv2d_2round', shape=(1, 56, 56, 256))
+    r = sym.Variable('binary_conv2d_2round', shape=(256, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_2' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_2'+'shift')
     network = sym.max_pool2d(network, name='max_pooling2d_1', layout=layout, pool_size=(2, 2), padding=(0, 0), strides=(2, 2))
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_3')
-    r = sym.Variable('binary_conv2d_3round', shape=(1, 28, 28, 512))
+    r = sym.Variable('binary_conv2d_3round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_3' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_3'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_4')
-    r = sym.Variable('binary_conv2d_4round', shape=(1, 28, 28, 512))
+    r = sym.Variable('binary_conv2d_4round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_4' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_4'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_5')
-    r = sym.Variable('binary_conv2d_5round', shape=(1, 28, 28, 512))
+    r = sym.Variable('binary_conv2d_5round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_5' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_5'+'shift')
     network = sym.max_pool2d(network, name='max_pooling2d_2', layout=layout, pool_size=(2, 2), padding=(0, 0), strides=(2, 2))
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_6')
-    r = sym.Variable('binary_conv2d_6round', shape=(1, 14, 14, 512))
+    r = sym.Variable('binary_conv2d_6round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_6' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_6'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_7')
-    r = sym.Variable('binary_conv2d_7round', shape=(1, 14, 14, 512))
+    r = sym.Variable('binary_conv2d_7round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_7' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_7'+'shift')
     network = sym.bitserial_conv2d(data=network, kernel_size=(3, 3), channels=512, padding=[1, 1, 1, 1], strides=(1, 1), layout=layout, kernel_layout=kernel_layout, use_pool=False, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', bit_axis=bit_axis, name='binary_conv2d_8')
-    r = sym.Variable('binary_conv2d_8round', shape=(1, 14, 14, 512))
+    r = sym.Variable('binary_conv2d_8round', shape=(512, ))
     network = network + r
     sym.clip_channelwise(network, axis=3, name='binary_conv2d_8' +'clip')
     network = sym.right_shift_channelwise(network, axis=3, name= 'binary_conv2d_8'+'shift')
     network = sym.max_pool2d(network, name='max_pooling2d_3', layout=layout, pool_size=(2, 2), padding=(0, 0), strides=(2, 2))
     network = sym.flatten(data=network)
     network = sym.bitserial_dense(data=network, units=4096, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', name='binary_dense')
-    r = sym.Variable('binary_denseround', shape=(1, 4096))
+    r = sym.Variable('binary_denseround', shape=(4096, ))
     network = network + r
     network = sym.clip_channelwise(network, axis=0, name='binary_dense'+'clip')
     network = sym.right_shift_channelwise(network, axis=0, name='binary_dense'+'shift')
     network = sym.flatten(data=network)
     network = sym.bitserial_dense(data=network, units=4096, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', name='binary_dense_1')
-    r = sym.Variable('binary_dense_1round', shape=(1, 4096))
+    r = sym.Variable('binary_dense_1round', shape=(4096, ))
     network = network + r
     network = sym.clip_channelwise(network, axis=0, name='binary_dense_1'+'clip')
     network = sym.right_shift_channelwise(network, axis=0, name='binary_dense_1'+'shift')
     network = sym.flatten(data=network)
     network = sym.bitserial_dense(data=network, units=1000, activation_bits=abits, weight_bits=wbits, pack_dtype='uint8', out_dtype='int16', name='binary_dense_2')
-    r = sym.Variable('binary_dense_2round', shape=(1, 1000))
+    r = sym.Variable('binary_dense_2round', shape=(1000, ))
     network = network + r
     network = sym.clip_channelwise(network, axis=0, name='binary_dense_2'+'clip')
     network = sym.right_shift_channelwise(network, axis=0, name='binary_dense_2'+'shift')
@@ -163,6 +163,8 @@ def build_network():
 
 
 if __name__ == '__main__':
+    get_network()
+    print ("network")
     # Load existing NNVM module
     directory = '/sampa/home/cowanmeg/tvm-current/end2end/models'
     data_np, data = load_test_image()

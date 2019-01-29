@@ -422,10 +422,9 @@ def compute_bitserial_conv2d(attrs, inputs, _):
                     pool_size=pool_size, pool_stride=pool_strides, pool_pad=pool_padding,
                     pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa, pack_inputs=pack_inputs, pack_outputs=pack_outputs)
     elif layout == 'NHWC':
-        out = None
-        # out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], None, None, None, None,
-        #             strides, padding, activation_bits, 
-        #             weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1],
+                    strides, padding, activation_bits, 
+                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
     else: # NCHW
         out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, 
                     weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)

@@ -18,22 +18,34 @@ from tvm.contrib import util
 from tvm.contrib.util import tempdir
 import tvm.contrib.graph_runtime as runtime
 
-import logging
-logging.getLogger('autotvm').setLevel(logging.DEBUG)
+# import logging
+# logging.getLogger('autotvm').setLevel(logging.DEBUG)
 
-FUSED=True
-
+version = 11
 DEFAULT_TRIALS = 10
 target = tvm.target.arm_cpu("rasp3b")
 target_host = 'llvm -device=arm_cpu -target=arm-linux-gnueabihf -mattr=+neon'
 device_key = 'rpi3b'
 
-if FUSED:
-    from end2end.fused_nnvm_vgg import get_network
-    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/fused_vggnet_rasp3b.log'
-else:
+if version == 1:
+    from end2end.nnvm_vgg_bn import get_network
+    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/bn_vggnet_rasp3b.log'
+if version == 2:
+    from end2end.nnvm_vgg_sn_scale import get_network
+    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/sn_vggnet_rasp3b.log'
+elif version == 3:
     from end2end.nnvm_vgg import get_network
     log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vggnet_rasp3b.log'
+elif version == 7:
+    from end2end.fused_nnvm_vgg import get_network
+    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/fused_vggnet_rasp3b.log'
+elif version == 10:
+    from end2end.nnvm_alexnet import get_network
+    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/alexnet_rasp3b.log'
+elif version == 11:
+    from end2end.nnvm_alexnet_bn import get_network
+    log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/alexnet_bn_rasp3b.log'
+
 
 tuning_option = {
     'log_filename': log_file,

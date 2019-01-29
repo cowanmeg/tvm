@@ -102,7 +102,7 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
         name="Conv2dOutput", tag="bitserial_conv2d_nchw")
 
 @tvm.target.generic_func
-def old_bitserial_conv2d_nhwc(data, kernel,
+def bitserial_conv2d_nhwc(data, kernel,
                           stride, padding, activation_bits, weight_bits,
                           pack_dtype, out_dtype, dorefa):
     """Bitserial Conv2D operator.
@@ -185,7 +185,7 @@ def old_bitserial_conv2d_nhwc(data, kernel,
     return conv
 
 @tvm.target.generic_func
-def bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
+def packed_bitserial_conv2d_nhwc(data, kernel,  bias, clip_min, clip_max, rshift,
                           stride, padding, activation_bits, weight_bits,
                           pack_dtype, out_dtype, dorefa, 
                           pool_size=None, pool_stride=None, pool_pad=None,

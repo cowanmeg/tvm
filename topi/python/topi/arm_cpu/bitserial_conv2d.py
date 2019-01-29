@@ -20,8 +20,8 @@ def _topi_bitserial_conv2d(*args, **kwargs):
     C = topi.nn.bitserial_conv2d_nhwc(*args, **kwargs)
     s = generic.nn.schedule_bitserial_conv2d_nhwc([C])
     data, kernel, bias, clip_min, clip_max, rshift = args[:6]
-    return s, [data, kernel, clip_min, clip_max, rshift, C]
-    # return s, [data, kernel, C]
+    # return s, [data, kernel, clip_min, clip_max, rshift, C]
+    return s, [data, kernel, C]
 
 # @_get_schedule.register("arm_cpu")
 def _get_schedule_bitserial_conv2d(wkl, layout):
@@ -44,7 +44,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     return tvm.compute(kvshape, lambda co, dh, dw, b, vc, ci: \
         kernel_q[dh][dw][b][ci][co*VC+vc], name='kernel_vec')
 
-# @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
+@autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def spatial_pack_nhwc(cfg, data, kernel,
                       stride, padding, activation_bits, weight_bits, 
                       pack_dtype, out_dtype, dorefa):
@@ -162,7 +162,7 @@ def spatial_pack_nhwc(cfg, data, kernel,
 
     return conv
 
-@autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
+# @autotvm.register_topi_compute(bitserial_conv2d_nhwc, 'arm_cpu', 'direct')
 def packed(cfg, data, kernel, bias, clip_min, clip_max, rshift,
                       stride, padding, activation_bits, weight_bits, 
                       pack_dtype, out_dtype, dorefa, 
@@ -437,11 +437,10 @@ def _intrin_popcount(m, k_i, w_b, x_b, dorefa):
 def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
                                   kernel_q, kernel_vec,
                                   conv_out, output, last, dorefa):
-    # no stride and padding info here
-    _, H, W, IB, CI = data_q.shape
-    # KH, KW, KB, _, CO = kernel_q.shape
-    # KB = get_const_int(KB)
-    KB = get_const_int(1)
+    return s
+    _, _, _, _, _, IB, CI = data_vec.shape
+    _, KH, KW, KB, _, _ = kernel_vec.shape
+    KB = get_const_int(KB)
     IB = get_const_int(IB)
 
     VC = cfg["tile_co"].size[-1]
@@ -490,12 +489,19 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec,
     s = s.normalize()
     return s
 
-def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, kernel_vec, data_vec, dorefa):
+def _schedule_packed(cfg, s, output, pool, shift, clip, bias, conv, conv_vec, kernel_vec, data_vec, data_pad, dorefa):
+    _, _, _, _, _, IB, CI = data_vec.shape
+    _, KH, KW, KB, _, _ = kernel_vec.shape
+    KB = get_const_int(KB)
+    IB = get_const_int(IB)
+
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
-    KB = 1
-    IB = 2
+
+    ##### Schedule data packing
+    if data_pad is not None:
+        s[data_pad].compute_inline()
 
     # Schedule relayout
     _, h, _, _, _, _, _ = s[data_vec].op.axis
@@ -635,8 +641,9 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             conv_vec = conv.op.input_tensors[0]
             kernel_vec = conv_vec.op.input_tensors[0]
             data_vec = conv_vec.op.input_tensors[1]
+            data_pad = data_vec.op.input_tensors[0]
             dorefa = "dorefa" in conv_vec.op.tag
-            _schedule_packed(cfg, s, bitpacked_output, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, dorefa)
+            _schedule_packed(cfg, s, bitpacked_output, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, data_pad, dorefa)
 
         elif 'pool' in op.tag:
             pool = op.output(0)
@@ -647,8 +654,9 @@ def schedule_bitserial_conv2d_nhwc_rasp(cfg, outs):
             conv_vec = conv.op.input_tensors[0]
             kernel_vec = conv_vec.op.input_tensors[0]
             data_vec = conv_vec.op.input_tensors[1]
+            data_pad = data_vec.op.input_tensors[0]
             dorefa = "dorefa" in conv_vec.op.tag
-            _schedule_packed(cfg, s, None, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, dorefa)
+            _schedule_packed(cfg, s, None, pool, None, None, None, conv, conv_vec, kernel_vec, data_vec, data_pad, dorefa)
         scheduled_ops.append(op)
 
     traverse(outs[0].op)

@@ -14,7 +14,7 @@ from topi.nn.util import get_pad_tuple
 from topi.util import get_const_int, get_const_tuple
 from tvm.contrib import util
 
-input_type='uint16'
+input_type='uint8'
 out_dtype='int16'
 pack_dtype='uint8'
 
@@ -290,26 +290,33 @@ def solution(batch, in_size, in_channel, num_filter, kernel, stride, padding,
 
 def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel, stride, padding, 
                         activation_bits, weight_bits, dorefa, pooling_kernel, pooling_stride, pooling_pad, 
-                        pack_outputs=True):
+                        pack_inputs=False, pack_outputs=True):
     in_height = in_width = in_size
     
     pad = get_padding(padding, kernel, kernel)
     with tvm.target.arm_cpu("rasp3b"):
-        A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=input_type, name='A')
-        W = tvm.placeholder((kernel, kernel, in_channel, num_filter), dtype=input_type, name='W')
-        Round = tvm.placeholder((in_channel,), dtype=out_dtype, name='Round')
-        ClipMin = tvm.placeholder((in_channel,), dtype=out_dtype, name='ClipMin')
-        ClipMax = tvm.placeholder((in_channel,), dtype=out_dtype, name='ClipMax')
-        RShift = tvm.placeholder((in_channel,), dtype=out_dtype, name='RShift')
+        if pack_inputs:
+            A = tvm.placeholder((batch, in_height, in_width, in_channel), dtype=input_type, name='A')
+        else:
+            A = tvm.placeholder((batch, in_height, in_width, activation_bits, in_channel//8), dtype=input_type, name='A')
+        if (in_channel//8) %8 != 0:
+            padded_channels = in_channel//8 + (in_channel//8)%8
+        else:
+            padded_channels = in_channel//8
+        W = tvm.placeholder((kernel, kernel, weight_bits, padded_channels, num_filter), dtype=input_type, name='W')
+        Round = tvm.placeholder((num_filter,), dtype=out_dtype, name='Round')
+        ClipMin = tvm.placeholder((num_filter,), dtype=out_dtype, name='ClipMin')
+        ClipMax = tvm.placeholder((num_filter,), dtype=out_dtype, name='ClipMax')
+        RShift = tvm.placeholder((num_filter,), dtype=out_dtype, name='RShift')
 
         B = topi.nn.bitserial_conv2d_nhwc(A, W, Round, ClipMin, ClipMax, RShift,
                                     stride, pad, activation_bits, weight_bits, 
                                     pack_dtype, out_dtype, dorefa, 
                                     pool_size=pool_size, pool_pad=pool_pad, pool_stride=pool_stride,
-                                    pack_inputs=True, pack_outputs=pack_outputs)
+                                    pack_inputs=pack_inputs, pack_outputs=pack_outputs)
         s = topi.generic.schedule_bitserial_conv2d_nhwc([B])
 
-        print(tvm.lower(s, [A, W, Round, ClipMin, ClipMax, RShift, B], simple_mode=True))
+        # print(tvm.lower(s, [A, W, Round, ClipMin, ClipMax, RShift, B], simple_mode=True))
 
         # a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np = solution(batch, in_size, in_channel, num_filter, kernel, stride, 
         # padding, activation_bits, weight_bits, dorefa, pooling_kernel, pooling_stride, pooling_pad)
@@ -322,15 +329,15 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
         clipmin_np = np.zeros(shape=(num_filter,)).astype(out_dtype)
         clipmax_np = np.random.randint(250, 255, size=(num_filter,)).astype(out_dtype)
         shift_np = np.random.randint(0, 4, size=(num_filter,)).astype(out_dtype)
-        if dorefa:
-            w_ = np.copy(w_np).astype(out_dtype)
-            for x in np.nditer(w_, op_flags=['readwrite']):
-                x[...] = 1 if x == 1 else -1
-            b_np = topi.testing.conv2d_nhwc_python(a_np, w_, stride, padding).astype(out_dtype)
-        else:
-            b_np = topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding).astype(out_dtype)
-        return a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np
-    a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np, b_np = get_ref_data()
+        # if dorefa:
+        #     w_ = np.copy(w_np).astype(out_dtype)
+        #     for x in np.nditer(w_, op_flags=['readwrite']):
+        #         x[...] = 1 if x == 1 else -1
+        #     b_np = topi.testing.conv2d_nhwc_python(a_np, w_, stride, padding).astype(out_dtype)
+        # else:
+        #     b_np = topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding).astype(out_dtype)
+        return a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np
+    a_np, w_np, r_np, clipmin_np, clipmax_np, shift_np = get_ref_data()
 
     
     target = 'llvm -target=armv7l-none-linux-gnueabihf -mcpu=cortex-a53 -mattr=+neon'
@@ -363,7 +370,7 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
     #     print ("Differences", np.unique(b.asnumpy() - b_np))
     #     tvm.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-3)
 
-    evaluator = func.time_evaluator(func.entry_name, ctx, number=2)
+    evaluator = func.time_evaluator(func.entry_name, ctx, number=5)
     print('Time: %f ms' % (evaluator(a, w, r, clipmin, clipmax, shift, b).mean * 1.0e3))
 
     return b
@@ -372,13 +379,46 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
 if __name__ == "__main__":
     # test_bitserial_conv2d(56, 64, 64, 3, 1, (1, 1, 1, 1))
     # test_bitserial_conv2d(56, 64, 64, 3, 1, 'SAME')
-    in_size = 56
-    ic = 64
-    oc = 64
+    # in_size = 56
+    # ic = 256
+    # oc = 256
+    abits = 2
+    wbits = 1
     k = 3
     stride = 1
+    pad = [1, 1, 1, 1]
     pool_size = [2, 2]
     pool_stride = [2, 2]
     pool_pad = (0, 0, 0, 0)
-    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, 'SAME', 2, 1, True, pool_size, 
-        pool_stride, pool_pad, True)
+    dorefa = True
+    # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, 'SAME', 2, 1, True, pool_size, 
+    #     pool_stride, pool_pad, True)
+
+
+    # def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel, stride, padding, 
+    #                     activation_bits, weight_bits, dorefa, pooling_kernel, pooling_stride, pooling_pad, 
+    #                     pack_inputs=False, pack_outputs=True):
+
+    print("binary_conv2d")
+    verify_bitserial_conv2d_nhwc(1, 56, 96, 256, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, True, True)
+    print("binary_conv2d_1")
+    verify_bitserial_conv2d_nhwc(1, 56, 256, 256, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False, True)
+    print("binary_conv2d_2")
+    verify_bitserial_conv2d_nhwc(1, 56, 256, 256, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False, True)
+
+    print("binary_conv2d_3, binary_conv2d_4")
+    verify_bitserial_conv2d_nhwc(1, 28, 256, 512, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False, True)
+    print("binary_conv2d_5")
+    verify_bitserial_conv2d_nhwc(1, 28, 512, 512, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False, True)
+
+    print("binary_conv2d_6, binary_conv2d_7")
+    verify_bitserial_conv2d_nhwc(1, 14, 512, 512, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False, True)
+    print("binary_conv2d_8")
+    verify_bitserial_conv2d_nhwc(1, 14, 512, 512, k, stride, pad, abits, wbits, dorefa, pool_size, 
+        pool_stride, pool_pad, False) # Don't pack before flattening

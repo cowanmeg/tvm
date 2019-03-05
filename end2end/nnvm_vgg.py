@@ -19,7 +19,7 @@ from tvm.contrib import util, rpc
 from topi.nn.bitserial_conv2d import bitpack
 from topi.util import get_const_tuple
 
-log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vggnet_rasp3b.log'
+# log_file =  os.environ["TVM_ROOT"] + '/tuner/logs/vggnet_rasp3b.log'
 
 # Network settings
 abits = 2
@@ -144,13 +144,16 @@ def run(data, ctx):
             (np.mean(prof_res), np.std(prof_res)))
 
 def build_network():
-    if RASP:
-        target = tvm.target.arm_cpu("rasp3b")
-    else:
-        target = 'llvm'
-
-    network = load_layers()
-    params, dtypes = load_parameter()
+    #if RASP:
+    #    target = tvm.target.arm_cpu("rasp3b")
+    #else:
+    #    target = 'llvm'
+    
+    # Building network for the target
+    target = 'llvm -target=arm-linux-gnueabihf --system-lib'
+    opt_level = 3
+    log_file = 'models/vggnet_rasp3b.txt' 
+    network, dtypes, params, input_shape, output_shape  = get_network()
 
     with autotvm.apply_history_best(log_file): 
         with nnvm.compiler.build_config(opt_level=opt_level):
@@ -159,31 +162,10 @@ def build_network():
                 shape={"data":input_shape}, 
                 params=params)
 
+    # Saving network library
+    lib.save('models/vggnet.o')
     return graph, lib, params
 
 
 if __name__ == '__main__':
-    get_network()
-    print ("network")
-    # Load existing NNVM module
-    directory = '/sampa/home/cowanmeg/tvm-current/end2end/models'
-    data_np, data = load_test_image()
-
-    if RASP:
-        lib_fname = os.path.join(directory, "rasp_vggnet.tar")
-        loaded_json = open(os.path.join(directory, "rasp_vggnet.json")).read()
-        loaded_params = bytearray(open(os.path.join(directory, "rasp_vggnet.params"), "rb").read())
-        remote.upload(lib_fname)
-        rlib = remote.load_module("rasp_vggnet.tar")
-        module = graph_runtime.create(loaded_json, rlib, ctx)
-        params = nnvm.compiler.load_param_dict(loaded_params)
-    else:
-        loaded_lib = tvm.module.load(os.path.join(directory, "vggnet.so"))
-        loaded_json = open(os.path.join(directory, "vggnet.json")).read()
-        loaded_params = bytearray(open(os.path.join(directory, "vggnet.params"), "rb").read())
-        module = graph_runtime.create(loaded_json, loaded_lib, ctx)
-        params = nnvm.compiler.load_param_dict(loaded_params)
-        
-    module.set_input(**params)
-    run(data, 1, ctx)
- 
+    build_network() 

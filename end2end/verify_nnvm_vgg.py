@@ -281,7 +281,7 @@ def load_layers(stop_layer=None):
                 print ('sym.clip_channelwise(network, axis=3, name=\'%s\' +\'clip\')' % layer.name)
                 print ('network = sym.right_shift_channelwise(network, axis=3, name= \'%s\'+\'shift\')' % layer.name)
         elif 'conv2d' in layer.name:
-            # This is the first layer - compute in NCHW
+            # This is the first layer - floating point conv
             channels = layer.filters
             kernel_size = layer.kernel_size
             strides = layer.strides
@@ -438,4 +438,3 @@ if __name__ == '__main__':
     with graph.as_default():
         data_tvm, data_tf = load_test_image()
         out = run(data_tvm)
-        # print (out)

@@ -365,7 +365,9 @@ def build_network():
                 dtype=dtypes,
                 shape={"data": input_shape},
                 params=params)
-
+    # Save graph
+    with open("models/vggnet.json", "w") as fo:
+            fo.write(graph.json())
     # Saving network library
     lib.save('models/vggnet.o')
     return graph, lib, params

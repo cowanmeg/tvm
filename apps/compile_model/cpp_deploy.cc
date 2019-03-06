@@ -12,7 +12,7 @@
 #include <iterator>
 #include <algorithm>
 
-void Verify(tvm::runtime::Module mod_syslib, std::string fname) {
+void RunModel(tvm::runtime::Module mod_syslib, std::string fname) {
   // Load json graph.
   std::ifstream json_in(fname + ".json", std::ios::in);
   std::string json_data((std::istreambuf_iterator<char>(json_in)), std::istreambuf_iterator<char>());
@@ -90,6 +90,6 @@ void Verify(tvm::runtime::Module mod_syslib, std::string fname) {
 int main(void) {
   LOG(INFO) << "Run system lib graph function on binary image.";
   tvm::runtime::Module mod_syslib = (*tvm::runtime::Registry::Get("module._GetSystemLib"))();
-  Verify(mod_syslib, "models/vggnet");
+  RunModel(mod_syslib, "models/vggnet");
   return 0;
 }

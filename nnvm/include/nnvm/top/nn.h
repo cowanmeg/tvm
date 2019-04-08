@@ -39,7 +39,7 @@ struct BitserialDenseParam : public dmlc::Parameter<BitserialDenseParam> {
   int out_dtype;
   int activation_bits;
   int weight_bits;
-  bool dorefa;
+  bool unipolar;
 
   DMLC_DECLARE_PARAMETER(BitserialDenseParam) {
     DMLC_DECLARE_FIELD(units).set_lower_bound(1)
@@ -58,7 +58,7 @@ struct BitserialDenseParam : public dmlc::Parameter<BitserialDenseParam> {
     .describe("Bitserial: Number of bits for the kernel.");
     DMLC_DECLARE_FIELD(activation_bits).set_default(2)
     .describe("Bitserial: Number of bits for acitvations/data.");
-     DMLC_DECLARE_FIELD(dorefa).set_default(true)
+     DMLC_DECLARE_FIELD(unipolar).set_default(true)
     .describe("Style of preforming binary popcount");
   }
   // constants
@@ -220,14 +220,7 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
   int activation_bits;
   int weight_bits;
   int bit_axis;
-  bool dorefa;
-
-  bool pack_inputs;
-  bool pack_outputs;
-  bool use_pool;
-  TShape pool_size;
-  TShape pool_strides;
-  TShape pool_padding;
+  bool unipolar;
 
   DMLC_DECLARE_PARAMETER(BitserialConv2DParam) {
     DMLC_DECLARE_FIELD(channels)
@@ -265,24 +258,11 @@ struct BitserialConv2DParam : public dmlc::Parameter<BitserialConv2DParam> {
       .describe("Bitserial: Number of bits for the kernel.");
     DMLC_DECLARE_FIELD(activation_bits).set_default(2)
       .describe("Bitserial: Number of bits for acitvations/data.");
-    DMLC_DECLARE_FIELD(dorefa).set_default(true)
+    DMLC_DECLARE_FIELD(unipolar).set_default(true)
       .describe("Style of performing popcount");
     DMLC_DECLARE_FIELD(bit_axis).set_default(-1)
-      .describe("Optional placement of bit axis for prepacked weights");
+      .describe("Optional placement of bit axis for prepacked weights. If this is set weights are already bitpacked");
     
-    DMLC_DECLARE_FIELD(pack_inputs).set_default(true)
-      .describe("If inputs need to be packed");
-    DMLC_DECLARE_FIELD(pack_outputs).set_default(false)
-      .describe("If outputs need to be packed");
-    DMLC_DECLARE_FIELD(use_pool).set_default(false)
-      .describe("Whether to fuse max pool into conv");
-    DMLC_DECLARE_FIELD(pool_size).set_default(TShape({2, 2}))
-      .describe("Specifies the dimensions of the optional pool.");
-    DMLC_DECLARE_FIELD(pool_strides).set_default(TShape({1, 1}))
-      .describe("Specifies the strides of the optional pool.");
-    DMLC_DECLARE_FIELD(pool_padding).set_default(TShape({0, 0, 0, 0}))
-      .describe("If padding is non-zero, then the input is implicitly zero-padded"
-                "on both sides for padding number of points");
   }
   // constants
   static const constexpr int kData = 0;

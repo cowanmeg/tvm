@@ -135,22 +135,15 @@ inline bool BitserialConv2DInferType(const nnvm::NodeAttrs& attrs,
                             std::vector<int>* in_type,
                             std::vector<int>* out_type) {
   const PARAM& param = nnvm::get<PARAM>(attrs.parsed);
-  // if (param.use_bias) {
-  //   CHECK_EQ(in_type->size(), 3U) << "Input:[data, weight, bias]";
-  // } else {
-  //   CHECK_EQ(in_type->size(), 2U) << "Input:[data, weight]";
-  // }
+
   CHECK_EQ(out_type->size(), 1U);
   if (param.out_dtype != -1) { // This is probably wrong - fix later
-    int weight = param.bit_axis > -1 ? param.pack_dtype : param.out_dtype;
-
     CHECK(!type_is_none((*in_type)[0]));
     for (size_t i = 2; i < in_type->size(); ++i) {
       NNVM_ASSIGN_INPUT_TYPE(attrs, *in_type, i, param.out_dtype);
     }
 
-    int out = param.pack_outputs ? param.pack_dtype : param.out_dtype;
-    NNVM_ASSIGN_OUTPUT_TYPE(attrs, *out_type, 0, out);
+    NNVM_ASSIGN_OUTPUT_TYPE(attrs, *out_type, 0, param.out_dtype);
   } else {
     ElemwiseType<-1, 1>(attrs, in_type, out_type);
   }
@@ -167,22 +160,17 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
   Layout out_layout(param.out_layout);
   if (!out_layout.defined()) out_layout = in_layout;
 
-  // if (param.pack_outputs) {
-  //   CHECK_EQ(in_shape->size(), 3U) << "Input:[data, weight, bias]";
-  // } else {
-  //   CHECK_EQ(in_shape->size(), 2U) << "Input:[data, weight]";
-  // }
   CHECK_EQ(out_shape->size(), 1U);
 
   TShape dshape = in_shape->at(0);
   if (dshape.ndim() == 0) return false;
 
-  // CHECK_EQ(dshape.ndim(), 4U) << "Input data should be 4D";
+  CHECK_EQ(dshape.ndim(), 4U) << "Input data should be 4D";
   CHECK_EQ(param.kernel_size.ndim(), 2U);
   CHECK_EQ(param.strides.ndim(), 2U)
       << "incorrect stride size: " << param.strides;
 
-  // Weight shape - check to see if the bit_axis is filled in, then the weights are prepacked
+  // Weight shape - check to see if the bit_axis is filled in, then the weights are prepacked and 5D tensor
   std::vector<dim_t> shape{param.kernel_size[0],
                              param.kernel_size[1],
                              dshape[3],
@@ -202,82 +190,18 @@ inline bool BitserialConv2DInferShape(const nnvm::NodeAttrs& attrs,
     shape.insert(shape_itr + bit_axis, 1, param.weight_bits);
   } 
   TShape wshape(shape);
+  
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, BitserialConv2DParam::kWeight, wshape);
 
-  // If using a fused pack, then need to add rounding bias
-  if (param.pack_outputs) {
-    static const Layout default_bias_layout("C");
-    TShape bias_shape({param.channels});
-    auto oc_block = out_layout.subsizeof('C');
-    if (oc_block > 0) {
-      size_t split_axis = (out_layout.indexof('C') < out_layout.indexof('c')) ? 1 : 0;
-      bias_shape = ConvertLayout(bias_shape, default_bias_layout,
-                                 default_bias_layout.split('C', split_axis, oc_block));
-    }
-    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, BitserialConv2DParam::kRound, bias_shape);
-    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, BitserialConv2DParam::kClipMin, bias_shape);
-    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, BitserialConv2DParam::kClipMax, bias_shape);
-    NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, BitserialConv2DParam::kRShift, bias_shape);
-    TShape oshape({dshape[0], 0, 0, param.activation_bits, param.channels / 8});
-    if (dshape[1] != 0) {
-      oshape[1] = (dshape[1] - param.kernel_size[0] + param.padding[0] + param.padding[2]) / param.strides[0] + 1;
-    }
-    if (dshape[2] != 0) {
-      oshape[2] = (dshape[2] - param.kernel_size[1] + param.padding[1] + param.padding[3]) / param.strides[1] + 1;
-    }
-    if (param.use_pool) {
-      dim_t pad_h, pad_w;
-      if (param.pool_padding.ndim() == 1) {
-        pad_h = param.pool_padding[0] * 2;
-        pad_w = param.pool_padding[0] * 2;
-      } else if (param.pool_padding.ndim() == 2) {
-        // (top, left)
-        pad_h = param.pool_padding[0] * 2;
-        pad_w = param.pool_padding[1] * 2;
-      } else if (param.pool_padding.ndim() == 4) {
-        // (top, left, bottom, right)
-        pad_h = param.pool_padding[0] + param.pool_padding[2];
-        pad_w = param.pool_padding[1] + param.pool_padding[3];
-      }
-      oshape[1] = ((oshape[1] + pad_h - param.pool_size[0] +
-                  param.pool_strides[0] - 1) / param.pool_strides[0]) + 1;
-      oshape[2] = ((oshape[2] + pad_w - param.pool_size[1] +
-                  param.pool_strides[1] - 1) / param.pool_strides[1]) + 1;
-    }
-    NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
-  } else {
-    // Normal bitserial_convd2d with no output packing
-    // Assumes NHWC
-    TShape oshape({dshape[0], 0, 0, param.channels});
-    if (dshape[1] != 0) {
-      oshape[1] = (dshape[1] - param.kernel_size[0] + param.padding[0] + param.padding[2]) / param.strides[0] + 1;
-    }
-    if (dshape[2] != 0) {
-      oshape[2] = (dshape[2] - param.kernel_size[1] + param.padding[1] + param.padding[3]) / param.strides[1] + 1;
-    }
-
-    if (param.use_pool) {
-      dim_t pad_h, pad_w;
-      if (param.pool_padding.ndim() == 1) {
-        pad_h = param.pool_padding[0] * 2;
-        pad_w = param.pool_padding[0] * 2;
-      } else if (param.pool_padding.ndim() == 2) {
-        // (top, left)
-        pad_h = param.pool_padding[0] * 2;
-        pad_w = param.pool_padding[1] * 2;
-      } else if (param.pool_padding.ndim() == 4) {
-        // (top, left, bottom, right)
-        pad_h = param.pool_padding[0] + param.pool_padding[2];
-        pad_w = param.pool_padding[1] + param.pool_padding[3];
-      }
-      oshape[1] = ((oshape[1] + pad_h - param.pool_size[0] +
-                  param.pool_strides[0] - 1) / param.pool_strides[0]) + 1;
-      oshape[2] = ((oshape[2] + pad_w - param.pool_size[1] +
-                  param.pool_strides[1] - 1) / param.pool_strides[1]) + 1;
-    }
-    NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
+  // Assumes NHWC
+  TShape oshape({dshape[0], 0, 0, param.channels});
+  if (dshape[1] != 0) {
+    oshape[1] = (dshape[1] - param.kernel_size[0] + param.padding[0] + param.padding[2]) / param.strides[0] + 1;
   }
-  
+  if (dshape[2] != 0) {
+    oshape[2] = (dshape[2] - param.kernel_size[1] + param.padding[1] + param.padding[3]) / param.strides[1] + 1;
+  }
+  NNVM_ASSIGN_OUTPUT_SHAPE(attrs, *out_shape, 0, oshape);
   NNVM_ASSIGN_INPUT_SHAPE(attrs, *in_shape, Conv2DParam::kData, dshape);
   return true;
 }
@@ -294,26 +218,9 @@ inline bool BitserialConv2DCorrectLayout(const NodeAttrs& attrs,
   if (!out_layout.defined()) out_layout = in_layout;
 
   const Layout kernel_layout(param.kernel_layout);
-  if (param.pack_outputs) {
-    CHECK_EQ(ilayouts->size(), 6U) << "Input:[data, weight, round, clip_a_min, clip_a_max, rshift]";
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 0, in_layout);
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 1, kernel_layout);
-    // automatically decide bias layout
-    Layout bias_layout("C");
-    auto oc_block = out_layout.subsizeof('C');
-    if (oc_block > 0) {
-      size_t split_axis = (out_layout.indexof('C') < out_layout.indexof('c')) ? 1 : 0;
-      bias_layout = bias_layout.split('C', split_axis, oc_block);
-    }
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 2, bias_layout);
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 3, bias_layout);
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 4, bias_layout);
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 5, bias_layout);
-  } else {
-    // CHECK_EQ(ilayouts->size(), 2U) << "Input:[data, weight]";
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 0, in_layout);
-    NNVM_ASSIGN_LAYOUT(*ilayouts, 1, kernel_layout);
-  }
+  NNVM_ASSIGN_LAYOUT(*ilayouts, 0, in_layout);
+  NNVM_ASSIGN_LAYOUT(*ilayouts, 1, kernel_layout);
+
 
   CHECK_EQ(olayouts->size(), 1U);
   NNVM_ASSIGN_LAYOUT(*olayouts, 0, out_layout);
@@ -771,10 +678,6 @@ a bias vector is created and added to the outputs.
 )code" NNVM_ADD_FILELINE)
 .add_argument("data", "4D Tensor", "Input data.")
 .add_argument("weight", "4D Tensor", "Weight matrix.")
-.add_argument("round", "1D Tensor", "Bias parameter.")
-.add_argument("clip_a_min", "1D Tensor", "Clip minimum.")
-.add_argument("clip_a_max", "1D Tensor", "Clip maximum.")
-.add_argument("rshift", "1D Tensor", "Right shift.")
 .add_arguments(BitserialConv2DParam::__FIELDS__())
 .set_attr_parser(ParamParser<BitserialConv2DParam>)
 .set_attr<FGetAttrDict>("FGetAttrDict", ParamGetAttrDict<BitserialConv2DParam>)

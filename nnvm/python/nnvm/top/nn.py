@@ -402,32 +402,18 @@ def compute_bitserial_conv2d(attrs, inputs, _):
     channels = attrs.get_int("channels")
     layout = attrs["layout"]
     pack_dtype = attrs['pack_dtype']
-    dorefa = attrs.get_bool('dorefa')
+    unipolar = attrs.get_bool('unipolar')
     out_dtype = attrs["out_dtype"]
     activation_bits = attrs.get_int("activation_bits")
     weight_bits = attrs.get_int("weight_bits")
-    pack_inputs = attrs.get_bool('pack_inputs')
-    pack_outputs = attrs.get_bool('pack_outputs')
-    use_pool = attrs.get_bool('use_pool')
-    assert layout == "NCHW" or layout == "NHWC"
-    if layout == 'NHWC' and (pack_outputs or use_pool):
-        if use_pool:
-            pool_size = attrs.get_int_tuple('pool_size')
-        else:
-            pool_size = None
-        pool_strides = attrs.get_int_tuple('pool_strides')
-        pool_padding = attrs.get_int_tuple('pool_padding')
-        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5],
-                    strides, padding, activation_bits, weight_bits, 
-                    pool_size=pool_size, pool_stride=pool_strides, pool_pad=pool_padding,
-                    pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa, pack_inputs=pack_inputs, pack_outputs=pack_outputs)
-    elif layout == 'NHWC':
+
+    if layout == 'NHWC':
         out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1],
                     strides, padding, activation_bits, 
-                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=unipolar) # This is out of date a bit...and the attribute has been named unipolar
     else: # NCHW
         out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding, activation_bits, 
-                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=dorefa)
+                    weight_bits, pack_dtype=pack_dtype, out_dtype=out_dtype, dorefa=unipolar)
 
     return out
 
@@ -452,11 +438,11 @@ def compute_btiserial_dense(attrs, inputs, _):
     weight_bits = attrs.get_int("weight_bits")
     pack_dtype = attrs['pack_dtype']
     out_dtype = attrs["out_dtype"]
-    dorefa = attrs.get_bool('dorefa')
+    unipolar = attrs.get_bool('unipolar')
     # if attrs.get_bool("use_bias"):
     #     return topi.nn.bitserial_dense(inputs[0], inputs[1], bias=inputs[2])
     return topi.nn.bitserial_dense(inputs[0], inputs[1], activation_bits,
-         weight_bits, pack_dtype, out_dtype, dorefa)
+         weight_bits, pack_dtype, out_dtype, unipolar)
 
 @reg.register_schedule("bitserial_dense")
 def schedule_bitserial_dense(attrs, outs, target):

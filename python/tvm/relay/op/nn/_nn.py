@@ -512,3 +512,45 @@ def schedule_deformable_conv2d(attrs, outs, target):
 
 
 reg.register_pattern("nn.deformable_conv2d", OpPattern.OUT_ELEMWISE_FUSABLE)
+
+@reg.register_compute("nn.bitserial_conv2d")
+def compute_bitserial_conv2d(attrs, inputs, out_type, target):
+    """Compute definition of conv2d"""
+    padding = get_const_tuple(attrs.padding)
+    strides = get_const_tuple(attrs.strides)
+    activation_bits = attrs.activation_bits
+    weight_bits = attrs.weight_bits
+    layout = attrs.data_layout
+    out_dtype = attrs.out_dtype
+    out_dtype = (inputs[0].dtype if out_dtype in ("same", "")
+                 else out_dtype)
+    pack_dtype = attrs.pack_dtype
+    unipolar = attrs.unipolar
+    if layout == "NHWC":
+        out = topi.nn.bitserial_conv2d_nhwc(inputs[0], inputs[1], strides, padding,
+                                            activation_bits, weight_bits, pack_dtype, 
+                                            out_dtype, unipolar)
+    elif layout == "NCHW":
+        out = topi.nn.bitserial_conv2d_nchw(inputs[0], inputs[1], strides, padding,
+                                            activation_bits, weight_bits, pack_dtype, 
+                                            out_dtype, unipolar)
+    else:
+        raise ValueError("not support arbitrary group number for now")
+    return [out]
+
+
+@reg.register_schedule("nn.bitserial_conv2d")
+def schedule_bitserial_conv2d(attrs, outs, target):
+    """Schedule definition of bitserial conv2d"""
+    layout = attrs.data_layout
+
+    with target:
+        if layout == "NHWC":
+            return topi.generic.schedule_bitserial_conv2d_nhwc(outs)
+        # elif layout == "NCHW":
+        #     return topi.generic.schedule_bitserial_conv2d_nchw(outs)
+        else:
+            raise ValueError("No compatible schedule")
+
+
+reg.register_pattern("nn.bitserial_conv2d", OpPattern.OUT_ELEMWISE_FUSABLE)

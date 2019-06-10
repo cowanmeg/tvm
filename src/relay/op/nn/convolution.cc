@@ -896,6 +896,169 @@ Expr MakeDeformableConv2D(Expr data,
 TVM_REGISTER_API("relay.op.nn._make.deformable_conv2d")
 .set_body_typed(MakeDeformableConv2D);
 
+// relay.nn.bitserial_conv2d
+TVM_REGISTER_NODE_TYPE(BitserialConv2DAttrs);
+
+bool BitserialConv2DRel(const Array<Type>& types,
+                        int num_inputs,
+                        const Attrs& attrs,
+                        const TypeReporter& reporter) {
+  CHECK_EQ(types.size(), 3);
+  const auto* data = types[0].as<TensorTypeNode>();
+  const auto* weight = types[1].as<TensorTypeNode>();
+  if (data == nullptr) return false;
+  static const Layout kNHWC("NHWC");
+  static const Layout kHWIO("HWIO");
+
+  const BitserialConv2DAttrs* param = attrs.as<BitserialConv2DAttrs>();
+  CHECK(param != nullptr);
+  const Layout in_layout(param->data_layout);
+  const Layout kernel_layout(param->kernel_layout);
+
+  const auto trans_in_layout = BijectiveLayoutNode::make(in_layout, kNHWC);
+  // How to handle the 2 layouts - or just support NHWC for now?
+  CHECK(trans_in_layout.defined())
+    << "Conv only support input layouts that are convertible from NHWC."
+    << " But got " << in_layout;
+
+  const auto trans_kernel_layout = BijectiveLayoutNode::make(kernel_layout, kHWIO);
+  CHECK(trans_kernel_layout.defined())
+    << "Conv only support kernel layouts that are convertible from HWIO."
+    << " But got "<< kernel_layout;
+
+  Layout out_layout(param->out_layout == "" ? param->data_layout : param->out_layout);
+  const auto trans_out_layout = BijectiveLayoutNode::make(out_layout, kNHWC);
+  CHECK(trans_out_layout.defined())
+      << "Conv only support output layouts that are convertible from NHWC."
+      << " But got " << out_layout;
+
+  Array<IndexExpr> dshape_nhwc = trans_in_layout.ForwardShape(data->shape);
+
+  IndexExpr channels;
+  // infer weight if the kernel_size and channels are defined
+  if (param->kernel_size.defined() && param->channels.defined()) {
+    CHECK_EQ(param->kernel_size.size(), 2);
+    channels = param->channels;
+    Array<IndexExpr> wshape(
+       { param->kernel_size[0],
+         param->kernel_size[1],
+         dshape_nhwc[3],
+         channels,
+         });
+    wshape = trans_kernel_layout.BackwardShape(wshape);
+    // assign result to reporter
+    reporter->Assign(types[1], TensorTypeNode::make(wshape, data->dtype));
+  } else {
+    // use weight to infer the conv shape.
+    if (weight == nullptr) return false;
+    auto wshape = trans_kernel_layout.ForwardShape(weight->shape);
+    if (param->kernel_size.defined()) {
+      CHECK_EQ(param->kernel_size.size(), 2);
+      // check the size
+      CHECK(reporter->AssertEQ(param->kernel_size[0], wshape[0]) &&
+            reporter->AssertEQ(param->kernel_size[1], wshape[1]))
+          << "Conv2D: shape of weight is inconsistent with kernel_size, "
+          << " kernel_size=" << param->kernel_size
+          << " wshape=" << wshape;
+    }
+    if (param->channels.defined()) {
+      CHECK(reporter->AssertEQ(param->channels, wshape[3]))
+          << "Conv2D: shape of weight is inconsistent with channels, "
+          << " channels=" << param->channels
+          << " wshape=" << wshape;
+    }
+    CHECK(reporter->AssertEQ(dshape_nhwc[1], wshape[2]));
+    channels = wshape[0];
+  }
+  // dilation
+  Array<IndexExpr> oshape({dshape_nhwc[0], 0, 0, channels});
+
+  oshape.Set(1, (dshape_nhwc[1] + param->padding[0] * 2 - param->kernel_size[0]) / param->strides[0] + 1);
+  oshape.Set(2, (dshape_nhwc[2] + param->padding[1] * 2 - param->kernel_size[1]) / param->strides[1] + 1);
+  DataType out_dtype = param->out_dtype;
+  if (out_dtype.bits() == 0) {
+    out_dtype = data->dtype;
+  }
+  oshape = trans_out_layout.BackwardShape(oshape);
+  // assign output type
+  reporter->Assign(types[2], TensorTypeNode::make(oshape, out_dtype));
+  return true;
+}
+
+// TODO: Handle prepacking?
+template<typename T>
+Array<Array<Layout> > BitserialConv2DInferCorrectLayout(
+    const Attrs& attrs,
+    const Array<Layout>& new_in_layouts,
+    const Array<Layout>& old_in_layouts,
+    const Array<Array<IndexExpr>> &old_in_shapes) {
+  const T* params = attrs.as<T>();
+
+  // We always make other operators to fit the layouts of convolution layers
+  // So this inference ignores all inputs
+  return Array<Array<Layout> >{{params->data_layout, params->kernel_layout},
+                               {params->out_layout == "" ?
+                                   params->data_layout : params->out_layout}};
+}
+
+// Positional relay function to create conv2d operator
+// used by frontend FFI.
+Expr MakeBitserialConv2D(Expr data,
+                         Expr weight,
+                         Array<IndexExpr> strides,
+                         Array<IndexExpr> padding,
+                         IndexExpr channels,
+                         int activation_bits,
+                         int weight_bits,
+                         Array<IndexExpr> kernel_size,
+                         std::string data_layout,
+                         std::string kernel_layout,
+                         std::string out_layout,
+                         DataType out_dtype,
+                         DataType pack_dtype,
+                         bool unipolar) {
+  auto attrs = make_node<BitserialConv2DAttrs>();
+  attrs->strides = std::move(strides);
+  attrs->padding = std::move(padding);
+  attrs->channels = std::move(channels);
+  attrs->kernel_size = std::move(kernel_size);
+  attrs->data_layout = std::move(data_layout);
+  attrs->kernel_layout = std::move(kernel_layout);
+  attrs->out_layout = std::move(out_layout);
+  attrs->out_dtype = std::move(out_dtype);
+  attrs->activation_bits = std::move(activation_bits);
+  attrs->weight_bits = std::move(weight_bits);
+  attrs->unipolar = std::move(unipolar);
+  attrs->pack_dtype = std::move(pack_dtype);
+  static const Op& op = Op::Get("nn.bitserial_conv2d");
+  return CallNode::make(op, {data, weight}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_API("relay.op.nn._make.bitserial_conv2d")
+.set_body_typed(MakeBitserialConv2D);
+
+RELAY_REGISTER_OP("nn.bitserial_conv2d")
+.describe(R"code(2D bitserial convolution layer (e.g. spatial convolution over images).
+
+This layer creates a bitserial convolution kernel that is convolved
+with the layer input to produce a tensor of outputs.
+
+- **data**: This depends on the `layout` parameter. Input is 4D array of shape
+            (batch_size, in_channels, height, width) if `layout` is `NCHW`.
+- **weight**: (channels, in_channels, kernel_size[0], kernel_size[1])
+- **out**:  This depends on the `layout` parameter. Output is 4D array of shape
+            (batch_size, channels, out_height, out_width) if `layout` is `NCHW`.
+
+)code" TVM_ADD_FILELINE) // TODO: Fix the comment
+.set_attrs_type_key("relay.attrs.BitserialConv2DAttrs")
+.set_num_inputs(2)
+.add_argument("data", "Tensor", "The input tensor.")
+.add_argument("weight", "Tensor", "The weight tensor.")
+.set_support_level(2) // TODO: Ask Jared what the support level should be
+.add_type_rel("BitserialConv2D", BitserialConv2DRel)
+.set_attr<FInferCorrectLayout>("FInferCorrectLayout",
+                               BitserialConv2DInferCorrectLayout<BitserialConv2DAttrs>);
+
 
 }  // namespace relay
 }  // namespace tvm

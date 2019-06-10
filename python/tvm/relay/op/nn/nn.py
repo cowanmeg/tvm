@@ -1197,3 +1197,95 @@ def deformable_conv2d(data,
     return _make.deformable_conv2d(data, offset, weight, strides, padding, dilation,
                                    deformable_groups, groups, channels, kernel_size, data_layout,
                                    kernel_layout, out_layout, out_dtype)
+
+
+def bitserial_conv2d(data,
+           weight,
+           strides=(1, 1),
+           padding=(0, 0, 0, 0),
+           activation_bits=2,
+           weight_bits=1,
+           channels=None,
+           kernel_size=None,
+           data_layout="NHWC",
+           kernel_layout="HWIO",
+           out_layout="",
+           out_dtype="",
+           pack_dtype="uint8",
+           unipolar=True):
+    r"""2D bitserial convolution.
+
+    This operator takes the weight as the convolution kernel
+    and convolves it with data to produce an output.
+
+
+    In the default case, where the data_layout is `NHWC`
+    and kernel_layout is `HWIO`, conv2d takes in
+    a data Tensor with shape `(batch_size, in_channels, height, width)`,
+    and a weight Tensor with shape `(channels, in_channels, kernel_size[0], kernel_size[1])`
+    to produce an output Tensor with the following rule:
+
+    .. math::
+
+        \mbox{out}[b, c, y, x] = \sum_{dy, dx, k}
+           \mbox{data}[b, k, \mbox{strides}[0] * y  + dy, \mbox{strides}[1] * x + dx] *
+           \mbox{weight}[c, k, dy, dx]
+
+    Padding and dilation are applied to data and weight respectively before the computation.
+    This operator accepts data layout specification.
+    Semantically, the operator will convert the layout to the canonical layout
+    (`NHWC` for data and `HWIO` for weight), perform the computation,
+    then convert to the out_layout.
+
+
+    Parameters
+    ----------
+    data : tvm.relay.Expr
+        The input data to the operator.
+
+    weight : tvm.relay.Expr
+        The weight expressions.
+
+    strides : tuple of int, optional
+        The strides of convoltution.
+
+    padding : tuple of int, optional
+        The padding of convolution on both sides of inputs before convolution.
+
+    activation_bits : int, optional
+        Number of bits of precision for the activations.
+
+    weight_bits : int, optional
+        Number of bits of precision for the weights.
+
+    channels : int, optional
+        Number of output channels of this convolution.
+
+    kernel_size : tuple of int, optional
+        The spatial of the convolution kernel.
+
+    data_layout : str, optional
+        Layout of the input.
+
+    kernel_layout : str, optional
+        Layout of the weight.
+
+    out_layout : str, optional
+        Layout of the output, by default, out_layout is the same as data_layout
+
+    out_dtype : str, optional
+        Specifies the output data type for mixed precision conv2d.
+
+    pack_dtype: str
+
+    unipolar: boolean
+
+    Returns
+    -------
+    result : tvm.relay.Expr
+        The computed result.
+    """
+    return _make.bitserial_conv2d(data, weight, strides, padding, channels,
+                                  activation_bits, weight_bits, kernel_size,
+                                  data_layout, kernel_layout, out_layout,
+                                  out_dtype, pack_dtype, unipolar)

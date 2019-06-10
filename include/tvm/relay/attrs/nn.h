@@ -103,6 +103,7 @@ struct Conv2DAttrs : public tvm::AttrsNode<Conv2DAttrs> {
 };
 
 
+
 /*! \brief Attributes used in winograd weight transformation operators */
 struct Conv2DWinogradWeightTransformAttrs :
     public tvm::AttrsNode<Conv2DWinogradWeightTransformAttrs> {
@@ -252,6 +253,65 @@ struct Conv2DTransposeAttrs : public tvm::AttrsNode<Conv2DTransposeAttrs> {
         .describe("Dimension ordering of output. Can be 'NCHW', 'NHWC', etc."
                       "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
                       "dimensions respectively. Default to be same as input layout.");
+    TVM_ATTR_FIELD(out_dtype)
+        .set_default(NullValue<DataType>())
+        .describe("Output data type, set to explicit type under mixed precision setting");
+  }
+};
+
+
+struct BitserialConv2DAttrs : public tvm::AttrsNode<BitserialConv2DAttrs> {
+  Array<IndexExpr> strides;
+  Array<IndexExpr> padding;
+  int activation_bits;
+  int weight_bits;
+  IndexExpr channels;
+  Array<IndexExpr> kernel_size;
+  std::string data_layout;
+  std::string kernel_layout;
+  std::string out_layout;
+  DataType pack_dtype;
+  DataType out_dtype;
+  bool unipolar;
+
+  TVM_DECLARE_ATTRS(Conv2DAttrs, "relay.attrs.Conv2DAttrs") {
+    TVM_ATTR_FIELD(strides).set_default(Array<IndexExpr>({1, 1}))
+        .describe("Specifies the strides of the convolution.");
+    TVM_ATTR_FIELD(padding).set_default(Array<IndexExpr>({0, 0}))
+        .describe("If padding is non-zero, then the input is implicitly zero-padded"
+                  "on both sides for padding number of points");
+    TVM_ATTR_FIELD(activation_bits).set_default(2)
+        .describe("Specifies the number of bits of precision for activations.");
+    TVM_ATTR_FIELD(weight_bits).set_default(1)
+        .describe("Specifies the number of bits of precision for weights.");
+    TVM_ATTR_FIELD(channels)
+        .describe("The number of output channels in the convolution."
+                  " If it is not set, inferred by shape of the weight.")
+        .set_default(NullValue<IndexExpr>());
+    TVM_ATTR_FIELD(kernel_size)
+        .describe("Specifies the dimensions of the convolution window.")
+        .set_default(NullValue<Array<IndexExpr> >());
+    TVM_ATTR_FIELD(data_layout).set_default("NHWC")
+        .describe("Dimension ordering of input data. Can be 'NCHW', 'NHWC', etc."
+                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                  "dimensions respectively. Convolution is applied on the 'H' and"
+                  "'W' dimensions.");
+    TVM_ATTR_FIELD(kernel_layout).set_default("HWIO")
+        .describe("Dimension ordering of weight. Can be 'OIHW', 'OIHW16o16i', etc."
+                  "'O', 'I', 'H', 'W' stands for num_filter, input_channel, height, and width"
+                  "dimensions respectively.");
+    TVM_ATTR_FIELD(out_layout).set_default("")
+        .describe("Dimension ordering of output. Can be 'NCHW', 'NHWC', etc."
+                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                  "dimensions respectively. Default to be same as input layout.");
+    TVM_ATTR_FIELD(out_layout).set_default("")
+        .describe("Dimension ordering of output. Can be 'NCHW', 'NHWC', etc."
+                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
+                  "dimensions respectively. Default to be same as input layout.");
+    TVM_ATTR_FIELD(unipolar).set_default(true)
+      .describe("Selects the style of popcount");
+    TVM_ATTR_FIELD(pack_dtype).set_default(UInt(8))
+        .describe("Pack datatype");
     TVM_ATTR_FIELD(out_dtype)
         .set_default(NullValue<DataType>())
         .describe("Output data type, set to explicit type under mixed precision setting");
@@ -529,10 +589,7 @@ struct DeformableConv2DAttrs : public tvm::AttrsNode<DeformableConv2DAttrs> {
         .describe("Dimension ordering of weight. Can be 'OIHW', 'OIHW16o16i', etc."
                   "'O', 'I', 'H', 'W' stands for num_filter, input_channel, height, and width"
                   "dimensions respectively.");
-    TVM_ATTR_FIELD(out_layout).set_default("")
-        .describe("Dimension ordering of output. Can be 'NCHW', 'NHWC', etc."
-                  "'N', 'C', 'H', 'W' stands for batch, channel, height, and width"
-                  "dimensions respectively. Default to be same as input layout.");
+    
 
     // use 0 bits to indicate none.
     TVM_ATTR_FIELD(out_dtype)

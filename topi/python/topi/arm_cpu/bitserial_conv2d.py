@@ -27,6 +27,9 @@ from ..nn.util import get_pad_tuple
 from ..util import get_const_int, get_const_tuple
 from .. import generic
 
+import os
+from tvm.contrib import util, clang
+
 def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
     if use_bitpack:
         kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
@@ -43,7 +46,10 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
-    assert out_dtype == 'int16', "only support output type of int16"
+    if unipolar:
+        assert out_dtype == 'int16', "only support output type of int16"
+    else:
+        assert out_dtype == 'uint16', "only support output type of uint16"
 
     N, H, W, CI = get_const_tuple(data.shape)
     if len(kernel.shape) == 4:
@@ -88,7 +94,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] >= 2)
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
-                                  filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
+                                filter=lambda x: x.size[-1] == 16)
+                                #   filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
     re_axes = cfg.define_reorder("reorder_0",
                                  [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                                  policy='candidate', candidate=[
@@ -151,6 +158,81 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
                        name='conv', tag='spatial_bitserial_conv_nhwc')
 
     return conv
+
+def _inline_ukernel(intrin=True):
+    if intrin:
+        f = "/Users/cowanmeg/Research/tvm/synthesis/ukernel-intrin.c"
+    else: # assembly
+        f = "assembly.c"
+    src = open(f).read()
+    return clang.create_llvm(src, options=["-O3", "--target=armv7-none-linux-gnueabihf", "-mcpu=cortex-a53", "-mfpu=neon"])
+
+def _intrin(m, k_i, w_b, x_b, unipolar):
+    assert(m == 8)
+
+    # Temporary
+    assert(k_i == 16)
+    assert(w_b == 1)
+    assert(x_b == 1)
+
+    pack_dtype = 'uint8'
+    w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')
+    x = tvm.placeholder((x_b, k_i,), dtype=pack_dtype, name='x')
+    k = tvm.reduce_axis((0, k_i), name='k')
+    bw = tvm.reduce_axis((0, w_b), name='bw')
+    bx = tvm.reduce_axis((0, x_b), name='bx')
+    if unipolar:
+        dtype = 'int16'
+        z = tvm.compute((m,), lambda i:
+                        tvm.sum((tvm.popcount(w[bw, i, k].astype(dtype) & x[bx, k].astype(dtype)) -
+                                 tvm.popcount(~w[bw, i, k].astype(dtype) & x[bx, k].astype(dtype)))
+                                << (bw+bx).astype(dtype), axis=[bw, bx, k]), name='z')
+    else:
+        dtype = 'uint16'
+        z = tvm.compute((m,), lambda i:
+                        tvm.sum(tvm.popcount(w[bw, i, k].astype(dtype) & x[bx, k].astype(dtype))
+                                << (bw+bx).astype(dtype), axis=[bw, bx, k]), name='z')
+
+    Ab = tvm.decl_buffer(w.shape, w.dtype,
+                        name="A",
+                        offset_factor=1,
+                        strides=[tvm.var("s1"), tvm.var("s2"), 1])
+    Bb = tvm.decl_buffer(x.shape, x.dtype,
+                        name="B",
+                        offset_factor=1,
+                        strides=[tvm.var("s3"), 1])
+
+    Cb = tvm.decl_buffer(z.shape, z.dtype,
+                        name="C",
+                        offset_factor=1,
+                        strides=[1])
+    def intrin_func(ins, outs):
+        aa = ins[0]
+        bb = ins[1]
+        cc = outs[0]
+        def _body():
+            ib = tvm.ir_builder.create()
+            # TODO eventually pass in bits etc.
+            if unipolar:
+                name = "update_unipolar"
+            else:
+                name = "update_bipolar"
+            ib.emit(tvm.call_extern("int32", name,
+                                aa.access_ptr("r"),
+                                bb.access_ptr("r"),
+                                cc.access_ptr("rw")))
+
+            return ib.get()
+        def _reduce_reset():
+            ib = tvm.ir_builder.create()
+            ib.emit(tvm.call_extern("int32", "reset",
+                                cc.access_ptr("w")))
+            return ib.get()
+        def _reduce_update():
+            return _body()
+        return _body(), _reduce_reset(), _reduce_update()
+    with tvm.build_config(offset_factor=1):
+        return tvm.decl_tensor_intrin(z.op, intrin_func, binds={w: Ab, x: Bb, z: Cb})
 
 def _intrin_popcount(m, k_i, w_b, x_b, unipolar):
     pack_dtype = 'uint8'
@@ -298,8 +380,13 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     # Use microkernel
     kfactor = cfg['tile_ci'].size[1]
     if kfactor % 8 == 0:
-        pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
+        print(kfactor)
+        # For the old style
+        #pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
+        #s[conv_out].tensorize(kb, pc)
+        pc = _intrin(VC, kfactor, KB, IB, unipolar)
         s[conv_out].tensorize(kb, pc)
+        s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
 
     n, h, w, co = s[last].op.axis
     co, vc = cfg['tile_co'].apply(s, last, co)

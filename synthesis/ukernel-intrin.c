@@ -9,18 +9,20 @@ extern "C" int reset(uint16_t* dst) {
 }
 
 extern "C" int update(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
-    // todo - automate this
+    // todo - data loading
     uint8x16_t a[8];
     for(int i = 0; i < 8; i++)
         a[i] = vld1q_u8(src_a + 16*i);
     uint8x16_t b = vld1q_u8(src_b);
+    uint16x8_t output = vld1q_u16(dst);
 
+    // from racket phase 1: 
     for(int i = 0; i < 8; i++) {
 	uint8x16_t temp = vandq_u8(a[i], b);
 	a[i] = vcntq_u8(temp);
     }
     
-    
+    // todo - naming the upper and lower half 
     uint8x8_t d0 = vget_high_u8(a[0]);
     uint8x8_t d1 = vget_low_u8(a[0]);
     uint8x8_t d2 = vget_high_u8(a[1]);
@@ -38,9 +40,8 @@ extern "C" int update(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
     uint8x8_t d14 = vget_high_u8(a[7]);
     uint8x8_t d15 = vget_low_u8(a[7]);
 
-    uint16x8_t output = vld1q_u16(dst);
 
-    // from racket
+    // from racket phase 2
     uint8x8_t d0_ = vpadd_u8(d0, d1);
     uint8x8_t d1_ = vpadd_u8(d2, d3);
     uint8x8_t d2_ = vpadd_u8(d4, d5);
@@ -55,10 +56,10 @@ extern "C" int update(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
     uint8x8_t d3__ = vpadd_u8(d6_, d7_);
     uint8x8_t d0___ = vpadd_u8(d0__, d1__);
     uint8x8_t d1___ = vpadd_u8(d2__, d3__);
-    // TODO
+    // TODO combine
     uint16x8_t d0____ = vpadalq_u8(output, vcombine_u8(d0___, d1___));
 
-    // todo
+    // todo data writeback
     vst1q_u16(dst, d0____);
     return 0;
 }

@@ -163,7 +163,7 @@ def _inline_ukernel(intrin=True):
     if intrin:
         f = "/Users/cowanmeg/Research/tvm/synthesis/ukernel-intrin.c"
     else: # assembly
-        f = "assembly.c"
+        f = "assembly.c" # TODO
     src = open(f).read()
     return clang.create_llvm(src, options=["-O3", "--target=armv7-none-linux-gnueabihf", "-mcpu=cortex-a53", "-mfpu=neon"])
 
@@ -172,8 +172,6 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
 
     # Temporary
     assert(k_i == 16)
-    assert(w_b == 1)
-    assert(x_b == 1)
 
     pack_dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')
@@ -212,11 +210,10 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
         cc = outs[0]
         def _body():
             ib = tvm.ir_builder.create()
-            # TODO eventually pass in bits etc.
             if unipolar:
-                name = "update_unipolar"
+                name = "update_unipolar_a%db%d" % (w_b, x_b)
             else:
-                name = "update_bipolar"
+                name = "update_bipolar_a%db%d" % (w_b, x_b)
             ib.emit(tvm.call_extern("int32", name,
                                 aa.access_ptr("r"),
                                 bb.access_ptr("r"),
@@ -380,7 +377,6 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     # Use microkernel
     kfactor = cfg['tile_ci'].size[1]
     if kfactor % 8 == 0:
-        print(kfactor)
         # For the old style
         #pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
         #s[conv_out].tensorize(kb, pc)

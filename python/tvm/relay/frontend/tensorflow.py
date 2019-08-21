@@ -30,7 +30,9 @@ from topi.util import get_const_tuple
 from .. import ir_pass
 from .. import expr as _expr
 from .. import op as _op
+from .. import annotation as _annotation
 from ..expr_functor import ExprMutator
+from .. import module as _module
 
 __all__ = ['from_tensorflow']
 
@@ -483,6 +485,54 @@ def _decode_image():
         return inputs[0]
     return _impl
 
+def _crop_and_resize():
+    def _impl(inputs, attr, params):
+        # input image is a 4-D tensor of shape [batch, image_height, image_width, depth]
+        # boxes is a 2-D tensor of shape [num_boxes, 4], 4 is for [y1, x1, y2, x2]
+        try:
+            boxes = params.pop(inputs[1].name_hint).asnumpy().tolist()
+            box_ind = params.pop(inputs[2].name_hint).asnumpy().tolist()
+            crop_size = params.pop(inputs[3].name_hint).asnumpy().tolist()
+        except (IndexError, KeyError):
+            boxes = _infer_value(inputs[1], params).asnumpy().tolist()
+            box_ind = _infer_value(inputs[2], params).asnumpy().tolist()
+            crop_size = _infer_value(inputs[3], params).asnumpy().tolist()
+
+        data_shape = attr['_input_shapes'][inputs[0]]
+        data_dim = len(data_shape)
+        method = attr['method'].decode()
+
+        attrs = {}
+        attrs['size'] = crop_size
+        attrs['layout'] = 'NHWC'
+        if method.lower() == 'nearest':
+            raise tvm.error.OpAttributeUnimplemented(
+                'Attribute method=nearest is not supported')
+        else:
+            attrs['align_corners'] = True
+            attrs['method'] = 'BILINEAR'
+
+        out = None
+        begin = [0] * data_dim
+        size = data_shape[:]
+        for idx in box_ind:
+            # 1) Crop
+            # y is mapped to the image coordinate at y * (image_height - 1)
+            # x is mapped to the image coordinate at x * (image_width - 1)
+            begin[0] = idx
+            begin[1] = int(round(boxes[idx][0] * (data_shape[1] - 1)))
+            begin[2] = int(round(boxes[idx][1] * (data_shape[2] - 1)))
+            size[0] = idx + 1
+            size[1] = int(round((data_shape[1] - 1) * boxes[idx][2])) + 1
+            size[2] = int(round((data_shape[2] - 1) * boxes[idx][3])) + 1
+            res_crop = _op.strided_slice(inputs[0], begin=begin, end=size)
+
+            # 2) Resize
+            res_resize = _get_relay_op('resize')(res_crop, **attrs)
+            out = _op.concatenate([out, res_resize], axis=0) if out else res_resize
+        return out
+    return _impl
+
 def _cast():
     def _impl(inputs, attr, params):
         return inputs[0].astype(attr['DstT'].name)
@@ -511,6 +561,21 @@ def _resize_bilinear():
         return AttrCvt(op_name="resize",
                        ignores=['Tdim'],
                        extras={'method': "BILINEAR"})(inputs, attr)
+    return _impl
+
+def _resize_nearest_neighbor():
+    def _impl(inputs, attr, params):
+        size = attr['_output_shapes'][0][1:3]
+        if -1 in size:
+            size = _infer_value(inputs[1], params).asnumpy().reshape([-1]).tolist()
+        attr['size'] = size
+        inputs.pop(1)
+        # NHWC
+        attr['layout'] = 'NHWC'
+
+        return AttrCvt(op_name="resize",
+                       ignores=['Tdim'],
+                       extras={'method': "NEAREST_NEIGHBOR"})(inputs, attr)
     return _impl
 
 def _check_numerics():
@@ -592,7 +657,7 @@ def _slice():
                 end[i] = data_shape[i] - begin[i]
             else:
                 end[i] += begin[i]
-        return _op.strided_slice(inputs[0], begin=begin, end=size)
+        return _op.strided_slice(inputs[0], begin=begin, end=end)
     return _impl
 
 
@@ -643,10 +708,10 @@ def _depth_to_space():
             new_w = in_w * block_size
             newshape = (in_n, new_c, new_h, new_w)
 
-        return AttrCvt(
-            op_name="reshape",
-            extras={'newshape': newshape},
-            ignores=['data_format', 'block_size'])([transposed], attr)
+        return _annotation.stop_fusion(
+            AttrCvt(op_name="reshape",
+                    extras={'newshape': newshape},
+                    ignores=['data_format', 'block_size'])([transposed], attr))
 
     return _impl
 
@@ -777,12 +842,12 @@ def _sum():
             ignores=['name', 'Tidx'])([inputs[0]], attr)
     return _impl
 
-def _reduce_all():
+def _reduce(op):
     def _impl(inputs, attr, params):
         axis = params.pop(inputs[1].name_hint).asnumpy()
         axis = tuple(axis)
         return AttrCvt(
-            op_name='all',
+            op_name=op,
             extras={'axis': axis},
             transforms={'keep_dims':'keepdims'},
             ignores=['name', 'Tidx'])([inputs[0]], attr)
@@ -805,6 +870,14 @@ def _gather():
                        extras={'axis': tvm.const(axis, 'int32')},
                        ignores=['Tindices', 'Tparams', 'validate_indices',
                                 'Taxis', '_class'])(new_input, attr)
+    return _impl
+
+def _gather_nd():
+    """GatherNd"""
+    def _impl(inputs, attr, params):
+        return AttrCvt(op_name="gather_nd",
+                       ignores=['Tindices', 'Tparams',\
+                                'Taxis', '_class'])(inputs, attr)
     return _impl
 
 def _stridedSlice():
@@ -941,6 +1014,13 @@ def _where():
         return AttrCvt(op_name="where")(inputs, attr)
     return _impl
 
+def _clip_by_value():
+    def _impl(inputs, attr, params):
+        a_min = params.pop(inputs[1].name_hint).asnumpy()[0]
+        a_max = params.pop(inputs[2].name_hint).asnumpy()[0]
+        return _op.clip(inputs[0], a_min=a_min, a_max=a_max)
+    return _impl
+
 def _reverse_v2():
     def _impl(inputs, attr, params):
         axis = _get_num_param(params, inputs[1])
@@ -964,15 +1044,18 @@ def _rank():
 
 def _range():
     def _impl(inputs, attr, params):
-        start = _get_num_param(params, inputs[0])
-        limit = _get_num_param(params, inputs[1])
-        delta = _get_num_param(params, inputs[2])
-
-        name = attr["_node_name"]
-        params[name] = tvm.nd.array([start, limit, delta])
-        return [_expr.var(name,
-                          shape=params[name].shape,
-                          dtype='int32')]
+        start = params.pop(inputs[0].name_hint).asnumpy()[0]
+        limit = params.pop(inputs[1].name_hint).asnumpy()[0] \
+            if hasattr(inputs[1], "name_hint") else params.pop('Rank').asnumpy()[0]
+        delta = params.pop(inputs[2].name_hint).asnumpy()[0]
+        dtype = attr['dtype'].name if 'dtype' in attr else "int32"
+        return AttrCvt(
+            op_name="arange",
+            ignores=['Tidx'],
+            extras={'start': start,
+                    "stop": limit,
+                    'step': delta,
+                    'dtype': dtype})([], attr)
     return _impl
 
 def _elu():
@@ -1092,6 +1175,13 @@ def _topk():
                        extras={'k': k, 'is_ascend': False, 'dtype': 'int32'})(inputs, attr)
     return _impl
 
+def _floordiv():
+    def _impl(inputs, attr, params):
+        assert len(inputs) == 2
+        div = AttrCvt('divide')(inputs, attr)
+        return _get_relay_op('floor')(div)
+    return _impl
+
 def _logical(name):
     def _impl(inputs, attr, params):
         return AttrCvt(op_name=name)(inputs, attr)
@@ -1200,8 +1290,9 @@ _identity_list = []
 # for 1 to N mapping(composed), use custom callable functions
 # for N to 1 mapping, currently not supported(?)
 _convert_map = {
+    'Abs'                               : AttrCvt('abs'),
     'Add'                               : _elemwise('add'),
-    'All'                               : _reduce_all(),
+    'All'                               : _reduce('all'),
     'ArgMax'                            : _argx(_op.argmax, 'argmax'),
     'ArgMin'                            : _argx(_op.argmin, 'argmin'),
     'AvgPool'                           : _pooling('avg_pool'),
@@ -1212,9 +1303,11 @@ _convert_map = {
     'Cast'                              : _cast(),
     'Ceil'                              : AttrCvt('ceil'),
     'CheckNumerics'                     : _check_numerics(),
+    'ClipByValue'                       : _clip_by_value(),
     'Concat'                            : _concat(),
     'ConcatV2'                          : _concatV2(),
     'Conv2D'                            : _conv('conv'),
+    'CropAndResize'                     : _crop_and_resize(),
     'DecodeJpeg'                        : _decode_image(),
     'DepthwiseConv2dNative'             : _conv('depthwise'),
     'DepthToSpace'                      : _depth_to_space(),
@@ -1224,27 +1317,35 @@ _convert_map = {
     'ExpandDims'                        : _expand_dims(),
     'Fill'                              : _fill(),
     'Floor'                             : AttrCvt('floor'),
+    'FloorDiv'                          : _floordiv(),
     'FusedBatchNorm'                    : _fused_batch_norm(),
     'FusedBatchNormV2'                  : _fused_batch_norm(),
     'Gather'                            : _gather(),
+    'GatherNd'                          : _gather_nd(),
     'GatherV2'                          : _gather(),
     'Greater'                           : _broadcast('greater'),
     'GreaterEqual'                      : _broadcast('greater_equal'),
     'Identity'                          : _identity(),
     'LeakyRelu'                         : AttrCvt('leaky_relu'),
+    'LeftShift'                         : AttrCvt('left_shift'),
     'Less'                              : _broadcast('less'),
     'LessEqual'                         : _broadcast('less_equal'),
     'Log'                               : AttrCvt('log'),
     'LogicalAnd'                        : _logical('logical_and'),
     'LogicalOr'                         : _logical('logical_or'),
     'LogicalNot'                        : _logical('logical_not'),
+    'LogSoftmax'                        : AttrCvt('log_softmax'),
     'LRN'                               : _lrn(),
     'MatMul'                            : _matmul(),
+    'Max'                               : _reduce('max'),
     'MaxPool'                           : _pooling('max_pool'),
     'Maximum'                           : _elemwise('maximum'),
     'Mean'                              : _mean(),
+    'Min'                               : _reduce('min'),
     'Minimum'                           : _elemwise('minimum'),
+    'Mod'                               : _elemwise('mod'),
     'Mul'                               : _elemwise('multiply'),
+    'Neg'                               : AttrCvt('negative'),
     'NotEqual'                          : _broadcast('not_equal'),
     'Pack'                              : _pack(),
     'Pad'                               : _pad('Pad'),
@@ -1259,7 +1360,9 @@ _convert_map = {
     'Reshape'                           : _reshape(),
     'ResizeBilinear'                    : _resize_bilinear(),
     'ResizeBicubic'                     : _resize_bilinear(),
+    'ResizeNearestNeighbor'             : _resize_nearest_neighbor(),
     'ReverseV2'                         : _reverse_v2(),
+    'RightShift'                        : AttrCvt('right_shift'),
     'Round'                             : AttrCvt('round'),
     'Rsqrt'                             : _rsqrt(),
     'Select'                            : _where(),
@@ -1283,7 +1386,9 @@ _convert_map = {
     'Tile'                              : _tile(),
     'TopKV2'                            : _topk(),
     'Transpose'                         : _transpose(),
+    'TruncateMod'                       : _elemwise('mod'),
     'Unpack'                            : _unpack(),
+    'ZerosLike'                         : AttrCvt('zeros_like'),
 
 }
 
@@ -1333,9 +1438,8 @@ def _LSTMBlockCell():
         gate_list = _op.split(gates_bias, indices_or_sections=4, axis=1)
         in_gate = _op.sigmoid(gate_list[0])
         in_transform = _op.tanh(gate_list[1])
-        forget_gate = _op.sigmoid(gate_list[2])
-        forget_gate = _op.add(forget_gate,
-                              tvm.relay.const(forget_bias, attr['T'].name))
+        forget_gate = _op.add(gate_list[2], tvm.relay.const(forget_bias, attr['T'].name))
+        forget_gate = _op.sigmoid(forget_gate)
         out_gate = _op.sigmoid(gate_list[3])
         next_c = _op.add(_op.multiply(forget_gate, in_state_c),
                          _op.multiply(in_gate, in_transform))
@@ -1785,6 +1889,7 @@ class GraphProto(object):
         self._input_shapes = {}
         self._loops = {}
         self._branches = {}
+        self._mod = _module.Module({})
 
     def from_tensorflow(self, graph, layout="NHWC", shape=None, outputs=None):
         """Construct relay nodes from tensorflow graph definition - GraphDef.
@@ -1818,8 +1923,9 @@ class GraphProto(object):
 
         Returns
         -------
-        sym : relay.op
-            The returned relay operator
+        mod : tvm.relay.Module
+            The module that optimizations will be performed on.
+
         params : dict
             A dict of name: tvm.nd.array pairs, used as pretrained weights
         """
@@ -2008,8 +2114,8 @@ class GraphProto(object):
 
         out = out[0] if len(out) == 1 else _expr.Tuple(out)
         func = _expr.Function(ir_pass.free_vars(out), out)
-
-        return func, self._params
+        self._mod[self._mod.entry_func] = func
+        return self._mod, self._params
 
     def _parse_import_prerequisites(self, graph):
         """ Calculate the named preconditions from TensorFlow `graph`.
@@ -2239,7 +2345,7 @@ class GraphProto(object):
     def _convert_operator(self, op_name, inputs, attrs,
                           graph, identity_list=None, convert_map=None):
         """Convert from Tensorflow operator to relay operator.
-        The converter must specify conversions explicity for incompatible name, and
+        The converter must specify conversions explicitly for incompatible name, and
         apply handlers to operator attributes.
 
         Parameters
@@ -2298,12 +2404,12 @@ def from_tensorflow(graph, layout="NHWC", shape=None, outputs=None):
 
     Returns
     -------
-    sym : relay.op
-        Compatible relay operator
+    mod : tvm.relay.Module
+        The module that optimizations will be performed on.
 
     params : dict of str to tvm.ndarray
         Dict of converted parameters stored in tvm.ndarray format
     """
     g = GraphProto()
-    sym, params = g.from_tensorflow(graph, layout, shape, outputs)
-    return sym, params
+    mod, params = g.from_tensorflow(graph, layout, shape, outputs)
+    return mod, params

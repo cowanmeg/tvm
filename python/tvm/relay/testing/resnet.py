@@ -155,10 +155,12 @@ def resnet(units,
         body = relay.nn.max_pool2d(data=body, pool_size=(3, 3), strides=(2, 2), padding=(1, 1))
 
     for i in range(num_stages):
+        print("Residual unit1", i)
         body = residual_unit(
             body, filter_list[i+1], (1 if i == 0 else 2, 1 if i == 0 else 2),
             False, name='stage%d_unit%d' % (i + 1, 1), bottle_neck=bottle_neck)
         for j in range(units[i]-1):
+            print("Residual unit2", i)
             body = residual_unit(
                 body, filter_list[i+1], (1, 1), True,
                 name='stage%d_unit%d' % (i + 1, j + 2), bottle_neck=bottle_neck)

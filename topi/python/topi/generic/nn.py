@@ -294,6 +294,22 @@ def schedule_deformable_conv2d_nchw(outs):
     return _default_schedule(outs, False)
 
 
+@tvm.target.override_native_generic_func("schedule_bitpack")
+def schedule_bitpack(outs):
+    """Schedule for bitpack
+    Parameters
+    ----------
+    outs: Array of Tensor
+          The computation graph description of bitpack 
+          in the format of an array of tensors.
+    Returns
+    -------
+    sch: Schedule
+        The computation schedule for the op.
+    """
+    return _default_schedule(outs, False)
+
+
 @tvm.target.generic_func
 def schedule_bitserial_conv2d_nchw(outs):
     """Schedule for bitserial_conv2d_nchw

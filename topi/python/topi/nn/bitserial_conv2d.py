@@ -65,7 +65,11 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
     """
     assert isinstance(stride, int) or len(stride) == 2
     Input_q = bitpack(data, activation_bits, pack_axis=1, bit_axis=2, pack_type=pack_dtype)
-    Filter_q = bitpack(filter, weight_bits, pack_axis=1, bit_axis=4, pack_type=pack_dtype)
+    # Kernel hasnt been packed if it has 4 dims.
+    if len(kernel.shape) == 4:
+        Filter_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=4, pack_type=pack_dtype)
+    else:
+        Filter_q = kernel
     batch, in_channel, activation_bits, in_height, in_width = Input_q.shape
     num_filter, _, kernel_h, kernel_w, weight_bits = Filter_q.shape
 
@@ -155,12 +159,14 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
     assert isinstance(stride, int) or len(stride) == 2
     Input_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=4, pack_type=pack_dtype)
     if len(kernel.shape) == 4:
+        kernel_h, kernel_w, _, num_filter = kernel.shape
         Filter_q = bitpack(kernel, weight_bits, pack_axis=2, bit_axis=4, pack_type=pack_dtype)
-        kernel_h, kernel_w, _, num_filter, _ = get_const_tuple(Filter_q.shape)
     else:
         Filter_q = kernel
-        kernel_h, kernel_w, _, _, num_filter = get_const_tuple(Filter_q.shape)
+        # oh no.....x86 and arm use different packing, but autotvm uses this generic one to decide the shape D: 
+        kernel_h, kernel_w, _, _, num_filter = kernel.shape
     batch, in_height, in_width, in_channel_q, _ = get_const_tuple(Input_q.shape)
+    # kernel_h, kernel_w, _, _, num_filter = get_const_tuple(Filter_q.shape)
 
     if isinstance(padding, int) or (isinstance(padding, (tuple, list)) and len(padding) == 2):
         TPAD, LPAD, DPAD, RPAD = get_pad_tuple(padding, kernel)
@@ -178,7 +184,7 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
     out_height = (in_height - kernel_h + TPAD + DPAD) // stride_h + 1
     out_width = (in_width - kernel_w + LPAD + RPAD) // stride_w + 1
     PadInput_q = pad(Input_q, pad_before, pad_after, name="PaddedInput")
-
+    print("nn.bsconv", kernel.shape, data.shape, (batch, out_height, out_width, out_channel))
     rc = tvm.reduce_axis((0, in_channel_q), name='rc')
     ry = tvm.reduce_axis((0, kernel_h), name='ry')
     rx = tvm.reduce_axis((0, kernel_w), name='rx')

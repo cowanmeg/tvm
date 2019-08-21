@@ -24,7 +24,7 @@ from ..nn.pad import pad
 from ..nn.bitserial_conv2d import bitserial_conv2d_nhwc
 from ..nn.bitserial_util import bitpack, binary_op_multiplier
 from ..nn.util import get_pad_tuple
-from ..util import get_const_int, get_const_tuple
+from ..util import traverse_inline, get_const_int, get_const_tuple
 from .. import generic
 
 import os
@@ -44,6 +44,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits,
                       pack_dtype, out_dtype, unipolar):
     """ Compute convolution with pack on spatial axes. """
+    print("bsconv", data.shape, kernel.shape)
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
     if unipolar:
@@ -94,8 +95,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] >= 2)
     ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
-                                filter=lambda x: x.size[-1] == 16)
-                                #   filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
+                                #filter=lambda x: x.size[-1] == 16)
+                               filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
     re_axes = cfg.define_reorder("reorder_0",
                                  [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                                  policy='candidate', candidate=[
@@ -160,8 +161,9 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     return conv
 
 def _inline_ukernel(intrin=True):
+    print("Inline ukernel")
     if intrin:
-        f = "/Users/cowanmeg/Research/tvm/synthesis/ukernel-intrin.c"
+        f = os.environ['TVM_HOME'] + "/synthesis/ukernel-intrin.c"
     else: # assembly
         f = "assembly.c" # TODO
     src = open(f).read()
@@ -378,11 +380,11 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     kfactor = cfg['tile_ci'].size[1]
     if kfactor % 8 == 0:
         # For the old style
-        #pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
-        #s[conv_out].tensorize(kb, pc)
-        pc = _intrin(VC, kfactor, KB, IB, unipolar)
+        pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
         s[conv_out].tensorize(kb, pc)
-        s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
+        #pc = _intrin(VC, kfactor, KB, IB, unipolar)
+        #s[conv_out].tensorize(kb, pc)
+        #s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
 
     n, h, w, co = s[last].op.axis
     co, vc = cfg['tile_co'].apply(s, last, co)
@@ -391,7 +393,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     s[last].reorder(n, oh, ow, co, vh, vw, vc)
     s[last].vectorize(vc)
     if last != output:
-        s[last].compute_inline()
+        s[output].compute_inline()
 
     s[conv_out].compute_at(s[last], co)
     s[last].parallel(oh)
@@ -403,15 +405,8 @@ def schedule_bitserial_conv2d_nhwc(cfg, outs):
     s = tvm.create_schedule([x.op for x in outs])
     scheduled_ops = []
 
-    def traverse(op):
+    def _callback(op):
         """Traverse operators from computation graph"""
-        # inline all one-to-one-mapping operators except the last stage (output)
-        if tag.is_broadcast(op.tag):
-            if op not in s.outputs:
-                s[op].compute_inline()
-            for tensor in op.input_tensors:
-                if tensor.op.input_tensors and tensor.op not in scheduled_ops:
-                    traverse(tensor.op)
 
         if 'spatial_bitserial_conv_nhwc' in op.tag:
             output = op.output(0)
@@ -429,7 +424,6 @@ def schedule_bitserial_conv2d_nhwc(cfg, outs):
             unipolar = "unipolar" in conv_out.op.tag
             _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
                                           conv_out, output, outs[0], unipolar)
-        scheduled_ops.append(op)
 
-    traverse(outs[0].op)
+    traverse_inline(s, outs[0].op, _callback)
     return s

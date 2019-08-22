@@ -184,7 +184,6 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
     out_height = (in_height - kernel_h + TPAD + DPAD) // stride_h + 1
     out_width = (in_width - kernel_w + LPAD + RPAD) // stride_w + 1
     PadInput_q = pad(Input_q, pad_before, pad_after, name="PaddedInput")
-    print("nn.bsconv", kernel.shape, data.shape, (batch, out_height, out_width, out_channel))
     rc = tvm.reduce_axis((0, in_channel_q), name='rc')
     ry = tvm.reduce_axis((0, kernel_h), name='ry')
     rx = tvm.reduce_axis((0, kernel_w), name='rx')

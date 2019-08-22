@@ -68,9 +68,8 @@ def bitserial_dense_generic(cfg, data, weight, data_bits, weight_bits, pack_dtyp
 
     ko, ki = cfg.define_split('tile_k', k, policy='all', num_outputs=2,
                               filter=lambda xx: xx.size[-1] == 8 or xx.size[-1] == 16)
-    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2)
-    yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2,
-                              filter=lambda xx: xx.size[-1] == 8)
+    xo, xi = cfg.define_split('tile_x', x, policy='all', num_outputs=2) #, filter=lambda xx: xx.size[-1] >= 2)
+    yo, yi = cfg.define_split('tile_y', y, policy='all', num_outputs=2, filter=lambda xx: xx.size[-1] == 8)
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, xi, wb, db, yi, ki],
                        policy='candidate', candidate=[

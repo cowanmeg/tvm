@@ -44,7 +44,6 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits,
                       pack_dtype, out_dtype, unipolar):
     """ Compute convolution with pack on spatial axes. """
-    print("bsconv", data.shape, kernel.shape)
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
     if unipolar:
@@ -89,7 +88,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ib, kb = cfg.reduce_axis(activation_bits), cfg.reduce_axis(weight_bits)
 
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
-                              filter=lambda x: x.size[-1] == 8)
+                              filter=lambda x: x.size[-1] % 8 == 0)
     oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] >= 2)
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,

@@ -431,7 +431,7 @@ def _convert_enter_integer(inexpr, keras_layer, etab):
     # Now quantize input
     inexpr = _op.clip(inexpr, a_min=0., a_max=1.)
     inexpr = _op.round(bit_range * inexpr)
-    inexpr = _op.cast(inexpr, 'int16')
+    inexpr = _op.cast(inexpr, 'int8')
     return inexpr
 
 
@@ -501,6 +501,9 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     act_type = keras_layer.activation.__name__
     if act_type != 'linear':
         out = _convert_activation(out, act_type, etab)
+
+    # TEMP HACK - ALSO WBITS=1 - Make this a separate layer
+    #out = dquantize(out, keras_layer.bits, 1, etab)
     return out
 
 
@@ -523,6 +526,7 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     }
     input_shape = keras_layer.input_shape
     input_dim = len(input_shape)
+    # HACK
     out = _op.nn.bitserial_dense(data=inexpr, **params)
     if keras_layer.use_bias:
         bias = etab.new_const(weightList[1])
@@ -531,7 +535,22 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     act_type = keras_layer.activation.__name__
     if act_type != 'linear':
         out = _convert_activation(out, act_type, etab)
+    # TEMP HACK
+    #out = dquantize(out, keras_layer.bits, 1, etab)
     return out
+
+# Quantize: Maps floating point to low bit int
+def quantize(x, abits, etab):
+    x = _op.clip(x, 0.0, 1.0)
+    #x = x * _op.cast(etab.new_const((1 << abits) - 1), 'float32') + _op.cast(etab.new_const(0.5), 'float32')
+    x = _op.cast(x, dtype='int8')
+    return x
+
+# Dequantize: Maps low bit int back to floating point
+def dquantize(x, abits, wbits, etab):
+    x = _op.cast(x, dtype='float32')
+    #x = x * _op.cast(etab.new_const(1.0 / (((1<<abits)-1)*((1<<wbits)-1))), 'float32')
+    return x
 
 # ShiftNorm Numpy Helper Functions
 def AP2(x):
@@ -969,6 +988,7 @@ def from_keras(model, shape=None, layout='NCHW'):
                         _convert_input_layer(inbound_layer)
                     else:
                         expr_name = inbound_layer.output.name + ':' + str(t_idx)
+                    print(expr_name)
                     expr = etab.get_expr(expr_name)
                     inexpr.append(expr)
                 if len(inexpr) == 1:

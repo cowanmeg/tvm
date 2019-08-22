@@ -502,8 +502,6 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     if act_type != 'linear':
         out = _convert_activation(out, act_type, etab)
 
-    # TEMP HACK - ALSO WBITS=1 - Make this a separate layer
-    #out = dquantize(out, keras_layer.bits, 1, etab)
     return out
 
 
@@ -535,8 +533,6 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     act_type = keras_layer.activation.__name__
     if act_type != 'linear':
         out = _convert_activation(out, act_type, etab)
-    # TEMP HACK
-    #out = dquantize(out, keras_layer.bits, 1, etab)
     return out
 
 # Quantize: Maps floating point to low bit int
@@ -547,9 +543,11 @@ def quantize(x, abits, etab):
     return x
 
 # Dequantize: Maps low bit int back to floating point
-def dquantize(x, abits, wbits, etab):
+def dquantize(x, keras_layer, etab):
+    wbits = 1
+    abits = keras_layer.bits
     x = _op.cast(x, dtype='float32')
-    #x = x * _op.cast(etab.new_const(1.0 / (((1<<abits)-1)*((1<<wbits)-1))), 'float32')
+    x = x * _op.cast(_expr.const(1.0 / (((2.0 ** abits)-1)*((2.0 ** wbits)-1))), 'float32')
     return x
 
 # ShiftNorm Numpy Helper Functions
@@ -831,6 +829,7 @@ _convert_map = {
     'Cropping2D'               : _convert_cropping,
 
     'EnterInteger'             : _convert_enter_integer,
+    'DQuantizeLayer'           : dquantize,
     'BinaryConv2D'             : _convert_bitserial_convolution,
     'BinaryDense'              : _convert_bitserial_dense,
     'ShiftNormalization'       : _convert_shiftnorm,

@@ -88,7 +88,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     ib, kb = cfg.reduce_axis(activation_bits), cfg.reduce_axis(weight_bits)
 
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
-                              filter=lambda x: x.size[-1] % 8 == 0)
+                              filter=lambda x: x.size[-1] == 8)
     oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] >= 2)
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,

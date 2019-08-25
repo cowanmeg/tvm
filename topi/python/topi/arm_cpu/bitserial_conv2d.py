@@ -171,9 +171,6 @@ def _inline_ukernel(intrin=True):
 def _intrin(m, k_i, w_b, x_b, unipolar):
     assert(m == 8)
 
-    # Temporary
-    assert(k_i == 16)
-
     pack_dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')
     x = tvm.placeholder((x_b, k_i,), dtype=pack_dtype, name='x')
@@ -211,10 +208,14 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
         cc = outs[0]
         def _body():
             ib = tvm.ir_builder.create()
-            if unipolar:
-                name = "update_unipolar_a%db%d" % (w_b, x_b)
+            if k_i == 8: 
+                half = "_half"
             else:
-                name = "update_bipolar_a%db%d" % (w_b, x_b)
+                half = ""
+            if unipolar:
+                name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
+            else:
+                name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
             ib.emit(tvm.call_extern("int32", name,
                                 aa.access_ptr("r"),
                                 bb.access_ptr("r"),
@@ -379,11 +380,12 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     kfactor = cfg['tile_ci'].size[1]
     if kfactor % 8 == 0:
         # For the old style
-        pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
+        # pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
+        # s[conv_out].tensorize(kb, pc)
+        # Inline
+        pc = _intrin(VC, kfactor, KB, IB, unipolar)
         s[conv_out].tensorize(kb, pc)
-        #pc = _intrin(VC, kfactor, KB, IB, unipolar)
-        #s[conv_out].tensorize(kb, pc)
-        #s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
+        s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
 
     n, h, w, co = s[last].op.axis
     co, vc = cfg['tile_co'].apply(s, last, co)

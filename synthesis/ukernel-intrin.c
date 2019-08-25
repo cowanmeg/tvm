@@ -16,7 +16,7 @@ extern "C" int update_unipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, int16_t
     uint8x8_t aa[8];
     int8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 16*i);
+        aa[i] = vld1_u8(src_a + 8*i);
     uint8x8_t b = vld1_u8(src_b);
     int16x8_t output = vld1q_s16(dst);
 
@@ -52,7 +52,7 @@ extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
     uint8x8_t aa[8];
     int8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 16*i);
+        aa[i] = vld1_u8(src_a + 8*i);
     uint8x8_t b = vld1_u8(src_b);
     int16x8_t output = vld1q_s16(dst);
 
@@ -67,7 +67,7 @@ extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1_u8(src_b + 16);
+    b = vld1_u8(src_b + 8);
     for(int i = 0; i < 8; i++) {
         uint8x8_t temp = vand_u8(aa[i], b);
         // not b and aa
@@ -100,7 +100,7 @@ extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t
     // todo - data loading
     uint8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1_u8(src_a + 16*i);
+        a[i] = vld1_u8(src_a + 8*i);
     uint8x8_t b = vld1_u8(src_b);
     uint16x8_t output = vld1q_u16(dst);
 
@@ -129,22 +129,23 @@ extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t
 
 extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
     // todo - data loading
+    uint8x8_t aa[8];
     uint8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1_u8(src_a + 16*i);
+        aa[i] = vld1_u8(src_a + 8*i);
     uint8x8_t b = vld1_u8(src_b);
     uint16x8_t output = vld1q_u16(dst);
 
     // from racket phase 1: 
     for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(a[i], b);
+        uint8x8_t temp = vand_u8(aa[i], b);
         a[i] = vcnt_u8(temp);
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
     b = vld1_u8(src_b + 8);
     for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(a[i], b);
+        uint8x8_t temp = vand_u8(aa[i], b);
         temp = vcnt_u8(temp);
         temp = vshl_n_u8(temp, 1);
         a[i] = vadd_u8(a[i], temp);

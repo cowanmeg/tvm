@@ -76,28 +76,28 @@ def verify_bitserial_conv2d_nhwc(batch, in_size, in_channel, num_filter, kernel,
 
     func = tvm.build(s, [A, W, B], device)
 
-    # host = '192.168.0.23'
-    # port = 9090
-    # remote = rpc.connect(host, port)
-    # ctx = remote.cpu()
-    # temp = util.tempdir()
-    # path = temp.relpath('lib.tar')
-    # func.export_library(path)
-    # remote.upload(path)
-    # f = remote.load_module('lib.tar')
-    # # launch the kernel.
-    # a = tvm.nd.array(a_np, ctx)
-    # w = tvm.nd.array(w_np, ctx)
-    # b = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
+    host = '192.168.0.23'
+    port = 9090
+    remote = rpc.connect(host, port)
+    ctx = remote.cpu()
+    temp = util.tempdir()
+    path = temp.relpath('lib.tar')
+    func.export_library(path)
+    remote.upload(path)
+    f = remote.load_module('lib.tar')
+    # launch the kernel.
+    a = tvm.nd.array(a_np, ctx)
+    w = tvm.nd.array(w_np, ctx)
+    b = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
 
-    # f(a, w, b)
-    # np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
+    f(a, w, b)
+    np.testing.assert_allclose(b.asnumpy(), b_np, rtol=1e-5)
 
 def test_bitserial_conv2d(in_size, ic, oc, k, stride, pad):
-    # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, False)
-    # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, False)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, False)
 
-    # verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, True)
+    verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 1, 1, True)
     verify_bitserial_conv2d_nhwc(1, in_size, ic, oc, k, stride, pad, 2, 1, True)
 
 if __name__ == "__main__":

@@ -233,6 +233,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
     with tvm.build_config(offset_factor=1):
         return tvm.decl_tensor_intrin(z.op, intrin_func, binds={w: Ab, x: Bb, z: Cb})
 
+# Old style
 def _intrin_popcount(m, k_i, w_b, x_b, unipolar):
     pack_dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')

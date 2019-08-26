@@ -127,8 +127,8 @@ bool BinaryConv2DRel(const Array<Type>& types,
   CHECK(param->channels.defined());
   CHECK(param->kernel_size.defined());
   Array<IndexExpr> oshape({dshape_nchw[0], param->channels, 0, 0});
-  oshape.Set(2, (dshape_nchw[2] + param->padding[0] * 2 - param->kernel_size[0]) / param->strides[0] + 1);
-  oshape.Set(3, (dshape_nchw[3] + param->padding[1] * 2 - param->kernel_size[1]) / param->strides[1] + 1);
+  oshape.Set(2, (dshape_nchw[2] + param->padding[0] + param->padding[2] - param->kernel_size[0]) / param->strides[0] + 1);
+  oshape.Set(3, (dshape_nchw[3] + param->padding[1] + param->padding[3] - param->kernel_size[1]) / param->strides[1] + 1);
   DataType out_dtype = param->out_dtype;
   oshape = trans_in_layout.BackwardShape(oshape);
   // assign output type

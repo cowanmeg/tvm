@@ -470,22 +470,24 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'data_layout': etab.data_layout}
     params['channels'] = n_filters
     if keras_layer.padding == 'valid':
-        pass
+        params['padding'] = (0, 0, 0, 0)
     # we insert a separate pad operator
     elif keras_layer.padding == 'same':
         in_h = keras_layer.input_shape[1]
         in_w = keras_layer.input_shape[2]
         pad_t, pad_b = _get_pad_pair(in_h, dilated_kernel_h, stride_h)
         pad_l, pad_r = _get_pad_pair(in_w, dilated_kernel_w, stride_w)
-        if pad_t == pad_b and pad_l == pad_r:
-            params['padding'] = (pad_t, pad_l)
-        else:
-            if etab.data_layout == 'NCHW':
-                inexpr = _op.nn.pad(data=inexpr, pad_width=(
-                    (0, 0), (0, 0), (pad_t, pad_b), (pad_l, pad_r)))
-            else:
-                inexpr = _op.nn.pad(data=inexpr, pad_width=(
-                    (0, 0), (pad_t, pad_b), (pad_l, pad_r), (0, 0)))
+        params['padding'] = (pad_t, pad_l, pad_b, pad_r)
+        # if pad_t == pad_b and pad_l == pad_r:
+        #     params['padding'] = (pad_t, pad_l)
+        # else:
+        #     params['padding'] = (pad_t, pad_l, pad_b, pad_r)
+        #     if etab.data_layout == 'NCHW':
+        #         inexpr = _op.nn.pad(data=inexpr, pad_width=(
+        #             (0, 0), (0, 0), (pad_t, pad_b), (pad_l, pad_r)))
+        #     else:
+        #         inexpr = _op.nn.pad(data=inexpr, pad_width=(
+        #             (0, 0), (pad_t, pad_b), (pad_l, pad_r), (0, 0)))
     else:
         msg = 'Padding with {} is not supported for operator Convolution ' \
               'in frontend Keras.'
@@ -987,7 +989,7 @@ def from_keras(model, shape=None, layout='NCHW'):
                         _convert_input_layer(inbound_layer)
                     else:
                         expr_name = inbound_layer.output.name + ':' + str(t_idx)
-                    print(expr_name)
+                    #print(expr_name)
                     expr = etab.get_expr(expr_name)
                     inexpr.append(expr)
                 if len(inexpr) == 1:

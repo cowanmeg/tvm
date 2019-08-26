@@ -160,7 +160,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     return conv
 
 def _inline_ukernel(intrin=True):
-    print("Inline ukernel")
     if intrin:
         f = os.environ['TVM_HOME'] + "/synthesis/ukernel-intrin.c"
     else: # assembly

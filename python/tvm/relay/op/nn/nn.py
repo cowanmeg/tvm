@@ -1245,6 +1245,7 @@ def bitserial_conv2d(data,
                      data_layout='NCHW',
                      pack_dtype='uint32',
                      out_dtype='int16',
+                     kernel_layout='HWIO',
                      unipolar=True):
     r"""2D convolution using bitserial computation.
 

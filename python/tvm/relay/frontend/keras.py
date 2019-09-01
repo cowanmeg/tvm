@@ -329,7 +329,7 @@ def _convert_separable_convolution(inexpr, keras_layer, etab):
     else:
         act_type = keras_layer.activation.__name__
     if act_type != 'linear':
-        out = _convert_activation(out, act_type, etab)
+        out = _convert_activation(out, aprintct_type, etab)
     return out
 
 
@@ -337,7 +337,7 @@ def _convert_flatten(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     # NCHW -> NHWC so that dense can be correctly converted
     if etab.data_layout == 'NCHW':
-        inexpr = _op.transpose(inexpr, axes=[0, 2, 3, 1])
+       inexpr = _op.transpose(inexpr, axes=[0, 2, 3, 1])
     return _op.nn.batch_flatten(inexpr)
 
 
@@ -349,7 +349,8 @@ def _convert_pooling(inexpr, keras_layer, etab):
     if pool_type == 'GlobalMaxPooling2D':
         return _convert_flatten(_op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     if pool_type == 'GlobalAveragePooling2D':
-        return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
+        return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
+        #return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     pool_h, pool_w = keras_layer.pool_size
     stride_h, stride_w = keras_layer.strides
     params = {'pool_size': [pool_h, pool_w],
@@ -426,7 +427,6 @@ def _convert_enter_integer(inexpr, keras_layer, etab):
     # Extract layer information
     scale = _expr.const(keras_layer.scale, dtype='float32')
     bit_range = _expr.const(2**(keras_layer.bits - 1), dtype='float32')
-
     inexpr = inexpr * scale
     # Now quantize input
     inexpr = _op.clip(inexpr, a_min=0., a_max=1.)
@@ -443,8 +443,10 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     # NHWC Actually needs HWIO, use OIHW for NCHW as below.
     if etab.data_layout == 'NCHW':
         weight = weightList[0].transpose([3, 2, 0, 1])
+        kernel_layout = 'HWIO'
     else:
         weight = weightList[0]
+        kernel_layout = 'OIHW'
     if isinstance(keras_layer.dilation_rate, (list, tuple)):
         dilation = [keras_layer.dilation_rate[0], keras_layer.dilation_rate[1]]
     else:
@@ -526,7 +528,6 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     }
     input_shape = keras_layer.input_shape
     input_dim = len(input_shape)
-    # HACK
     out = _op.nn.bitserial_dense(data=inexpr, **params)
     if keras_layer.use_bias:
         bias = etab.new_const(weightList[1])
@@ -540,7 +541,7 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
 # Quantize: Maps floating point to low bit int
 def quantize(x, abits, etab):
     x = _op.clip(x, 0.0, 1.0)
-    #x = x * _op.cast(etab.new_const((1 << abits) - 1), 'float32') + _op.cast(etab.new_const(0.5), 'float32')
+    x = x * _op.cast(etab.new_const((1 << abits) - 1), 'float32') + _op.cast(etab.new_const(0.5), 'float32')
     x = _op.cast(x, dtype='int8')
     return x
 
@@ -1006,6 +1007,7 @@ def from_keras(model, shape=None, layout='NCHW'):
                 # Remember previous layer for some of the bitserial operators
                 #keras_layer.previous_layer = previous_layer
                 #previous_layer = keras_layer
+                # print(op_name)
                 keras_op_to_relay(inexpr, keras_layer, op_name, etab)
     # model._output_coordinates contains out_node(oc[0]), node_index(oc[1]) and tensor_index(oc[2])
     # Get all output nodes in etab using the name made from above values.

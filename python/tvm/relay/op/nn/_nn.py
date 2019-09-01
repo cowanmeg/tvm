@@ -547,6 +547,7 @@ def compute_bitserial_conv2d(attrs, inputs, out_dtype, target):
     pack_dtype = attrs.pack_dtype
     out_dtype = attrs.out_dtype
     unipolar = attrs.unipolar
+    kernel_layout = attrs.kernel_layout
     if layout == 'NCHW':
         with target:
             out = topi.nn.bitserial_conv2d_nchw(

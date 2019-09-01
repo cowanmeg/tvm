@@ -64,14 +64,19 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
         4-D with shape [batch, out_channel, out_height, out_width]
     """
     assert isinstance(stride, int) or len(stride) == 2
-    Input_q = bitpack(data, activation_bits, pack_axis=1, bit_axis=2, pack_type=pack_dtype)
+    if len(data.shape) == 4:
+        Input_q = bitpack(data, activation_bits, pack_axis=1, bit_axis=2, pack_type=pack_dtype)
+    else:
+        Input_q = data
+
     # Kernel hasnt been packed if it has 4 dims.
     if len(kernel.shape) == 4:
-        Filter_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=4, pack_type=pack_dtype)
+        Filter_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
     else:
         Filter_q = kernel
+
     batch, in_channel, activation_bits, in_height, in_width = Input_q.shape
-    num_filter, _, kernel_h, kernel_w, weight_bits = Filter_q.shape
+    weight_bits, num_filter, _, kernel_h, kernel_w = Filter_q.shape
 
     if isinstance(padding, int) or (isinstance(padding, (tuple, list)) and len(padding) == 2):
         TPAD, LPAD, DPAD, RPAD = get_pad_tuple(padding, kernel)
@@ -113,7 +118,7 @@ def bitserial_conv2d_nchw(data, kernel, stride, padding, activation_bits, weight
                 PadInput_q[nn, rc, b1, yy * stride_h + ry, xx * stride_w + rx] &
                 Filter_q[ff, rc, ry, rx, b2])<< (b1b2)).astype(out_dtype),
                            axis=[rc, ry, rx, b2, b1]).astype(out_dtype)
-
+    
     return tvm.compute((batch, out_channel, out_height, out_width), _conv,
                        name="Conv2dOutput", tag="bitserial_conv2d_nchw")
 
@@ -219,15 +224,15 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
                       pack_dtype='uint32', out_dtype='int16', unipolar=True):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
-    data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
+    if len(data.shape) == 4:
+        data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
+    else:
+        data_q = data
     # Check if kernel is already bitpacked
     if len(kernel.shape) == 4:
         kernel_q = bitpack(kernel, weight_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
-        KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
     else:
-        kernel_vec = kernel
-        OCO, _, KH, KW, KB, VC = get_const_tuple(kernel_vec.shape)
-        CO = OCO * VC
+        kernel_q = kernel
 
     IB, N, CI, H, W = get_const_tuple(data_q.shape)
     KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
@@ -255,17 +260,14 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
     ib, kb = cfg.reduce_axis(in_bits), cfg.reduce_axis(weight_bits)
 
-    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
-                              filter=lambda x: max(x.size[1:]) <= 16)
-    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2,
-                              filter=lambda x: max(x.size[1:]) <= 16)
-    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2,
-                              filter=lambda x: max(x.size[1:]) <= 16)
+    co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2)
+    oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2)
+    ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2)
     cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
 
     cfg.define_reorder("reorder_0",
-                       [n, co, oh, ow, vc, vh, vw, kh, kw, kb, ib, ci],
-                       policy='interval_all', interval=(6, 11))
+                       [n, co, oh, ow, vc, vh, kh, kw, kb, ib, ci, vw],
+                       policy='interval_all', interval=(6, 10))
     # binary ops
     cfg.add_flop(2 * N * OH * OW * CO * CI * KH * KW * binary_op_multiplier(pack_dtype))
     # ====================
@@ -274,7 +276,7 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
 
-    dvshape = (1, TH//(VH*HSTR), TW//(VW*WSTR), CI, VH*HSTR+HCAT, VW*WSTR+WCAT, IB)
+    dvshape = (1, OH // VH, OW // VW, CI, VH*HSTR + KH-1, VW*WSTR + KW-1, IB)
     kvshape = (CO//VC, CI, KH, KW, KB, VC)
     ovshape = (1, CO//VC, OH//VH, OW//VW, VH, VW, VC)
     oshape = (1, CO, OH, OW)
@@ -287,9 +289,8 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     data_vec = tvm.compute(dvshape, lambda n, h, w, ci, vh, vw, b: \
         data_pad[b][n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw], name='data_vec')
 
-    if len(kernel.shape) == 4:
-        kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
-            kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')
+    kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
+        kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')
 
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')

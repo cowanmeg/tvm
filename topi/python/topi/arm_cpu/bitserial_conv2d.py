@@ -230,7 +230,9 @@ def _intrin(m, k_i, w_b, x_b, unipolar, ci):
                                 aa.access_ptr("r"),
                                 bb.access_ptr("r"),
                                 cc.access_ptr("rw"), 
-                                aa.strides[0]))
+                                aa.elem_offset,  aa.strides[0], aa.strides[1], 
+                                bb.elem_offset, bb.strides[0],
+                                cc.elem_offset))
 
             return ib.get()
         def _reduce_reset():
@@ -386,8 +388,8 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     kfactor = cfg['tile_ci'].size[1]
     if kfactor % 8 == 0:
         # For the old style
-        # pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
-        # s[conv_out].tensorize(kb, pc)
+        #pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
+        #s[conv_out].tensorize(kb, pc)
         # Inline intrinsics
         print(KB, kb)
         pc = _intrin(VC, kfactor, KB, IB, unipolar, cfg['tile_ci'].size[0])

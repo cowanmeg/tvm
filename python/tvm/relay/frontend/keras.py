@@ -466,7 +466,7 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'strides': [stride_h, stride_w],
               'padding': [0, 0],
               'activation_bits': keras_layer.bits,
-              'weight_bits': 1,
+              'weight_bits': etab.weight_bits,
               'out_dtype': 'int16',
               'pack_dtype': 'uint8',
               'data_layout': etab.data_layout}
@@ -522,7 +522,7 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
         'weight': q_weight,
         'units': weightList[0].shape[1],
         'data_bits': keras_layer.bits,
-        'weight_bits': 1,
+        'weight_bits': etab.weight_bits,
         'out_dtype': 'int16',
         'pack_dtype': 'uint8'
     }
@@ -904,7 +904,7 @@ def keras_op_to_relay(inexpr, keras_layer, outname, etab):
         etab.set_expr(name, out)
 
 
-def from_keras(model, shape=None, layout='NCHW'):
+def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
     """Convert keras model to relay Function.
 
     Parameters
@@ -955,6 +955,7 @@ def from_keras(model, shape=None, layout='NCHW'):
 
     etab = ExprTable()
     etab.data_layout = layout
+    etab.weight_bits = weight_bits
     #previous_layer = None
     for keras_layer in model.layers:
         if isinstance(keras_layer, keras.layers.InputLayer):

@@ -248,13 +248,12 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
         HSTR, WSTR = stride
     else:
         HSTR, WSTR = stride, stride
-    HCAT, WCAT = KH-1, KW-1
-
+    
     TH = H + TPAD + DPAD
     TW = W + LPAD + RPAD
-    OH = (H + TPAD + DPAD - KH) // HSTR + 1
-    OW = (W + LPAD + RPAD - KW) // WSTR + 1
-
+    OH = (TH - KH) // HSTR + 1
+    OW = (TW - KW) // WSTR + 1
+    print(TH, TW, OH, OW)
      # ==================== define configuration space ====================
     n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
     ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
@@ -263,11 +262,19 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2)
     oh, vh = cfg.define_split('tile_oh', oh, policy='all', num_outputs=2)
     ow, vw = cfg.define_split('tile_ow', ow, policy='all', num_outputs=2)
-    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+    
 
     cfg.define_reorder("reorder_0",
-                       [n, co, oh, ow, vc, vh, kh, kw, kb, ib, ci, vw],
-                       policy='interval_all', interval=(6, 10))
+                       [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vw, vc],
+                       policy='candidate', candidate=[
+                           [n, co, oh, ow, kh, kw, kb, ib, vh, vw, ci, vc],
+                           [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vc, vw],
+                           [n, co, oh, ow, kh, kw, kb, ib, ci, vc, vh, vw]
+                           ])
+
+    cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
+    cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
+
     # binary ops
     cfg.add_flop(2 * N * OH * OW * CO * CI * KH * KW * binary_op_multiplier(pack_dtype))
     # ====================

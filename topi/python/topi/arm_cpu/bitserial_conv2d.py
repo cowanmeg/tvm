@@ -30,7 +30,7 @@ from .. import generic
 import os
 from tvm.contrib import util, clang
 
-def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, use_bitpack=True):
+def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, VCI, use_bitpack=True):
     if use_bitpack:
         kernel_q = bitpack(kernel, kernel_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
     else:
@@ -59,7 +59,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
         KH, KW, KB, CI_packed, CO = get_const_tuple(kernel.shape)
 
     if isinstance(padding, int) or (isinstance(padding, (tuple, list)) and len(padding) == 2):
-        TPAD, LPAD, DPAD, RPAD = get_pad_tuple(padding, kernel)
+        DPAD, RPAD, TPAD, LPAD = get_pad_tuple(padding, kernel)
     else:
         TPAD, LPAD, DPAD, RPAD = padding
 
@@ -67,8 +67,6 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
         HSTR, WSTR = stride
     else:
         HSTR, WSTR = stride, stride
-    HCAT, WCAT = KH-1, KW-1
-
     PAD_H = H + (TPAD + DPAD)
     PAD_W = W + (LPAD + RPAD)
     OH = (PAD_H - KH) // HSTR + 1
@@ -76,12 +74,13 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     oshape = (1, OH, OW, CO)
 
     # Pad input channels of weights and data when it is not a multiple of 8
-    if CI_packed % 8 != 0:
-        CI_PAD = CI_packed % 8
-        CI_packed += CI_PAD
-    else:
-        CI_PAD = 0
-
+#    if CI_packed % 8 != 0:
+#        print("CI padding")
+#        CI_PAD = CI_packed % 8
+#        CI_packed += CI_PAD
+#    else:
+#        CI_PAD = 0
+#
     # ==================== define configuration space ====================
     n, oh, ow, co = cfg.axis(N), cfg.axis(OH), cfg.axis(OW), cfg.axis(CO)
     ci, kh, kw = cfg.reduce_axis(CI_packed), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
@@ -93,15 +92,20 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     # Microkernel constraints
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] == 8)
-    ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
-                                #filter=lambda x: x.size[-1] == 16)
-                               filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
+    if CI_packed == 8:
+        ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
+                                filter=lambda x: x.size[-1] == 8)
+    else:
+        ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
+                                    filter=lambda x: x.size[-1] == 16)
+    print("CI", ci_o, ci_i)
+    print("CO", co, vc)
     # Innermost 4 axis fixed for microkernel
     re_axes = cfg.define_reorder("reorder_0",
                                  [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                                  policy='candidate', candidate=[
                                      [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
-                                     [n, oh, ow, co, vh, vw, kw, ci_o, kh, kb, ib, vc, ci_i],
+                                     #[n, oh, ow, co, vh, vw, kw, ci_o, kh, kb, ib, vc, ci_i],
                                      [n, oh, ow, co, vh, vw, ci_o, kw, kh, kb, ib, vc, ci_i]])
     # binary ops
     cfg.add_flop(2 * N * OH * OW * CO * CI * KH * KW * binary_op_multiplier(pack_dtype))
@@ -110,28 +114,28 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
+    VCI = cfg["tile_ci"].size[-1]
 
     data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
 
-    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, len(kernel.shape) == 4)
-    if kernel_vec.shape[-1] % 8 != 0 and CI_PAD != 0:
-        kernel_vec = pad(kernel_vec, [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, CI_PAD])
+    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, VCI, len(kernel.shape) == 4)
+    #if kernel_vec.shape[-1] % 8 != 0 and CI_PAD != 0:
+    #    kernel_vec = pad(kernel_vec, [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, CI_PAD])
 
     N, H, W, IB, CI = data_q.shape
     OCO, KH, KW, KB, VC, CI = kernel_vec.shape
-
-    dvshape = (N, PAD_H//(VH*HSTR), PAD_W//(VW*WSTR), VH*HSTR+HCAT, VW*WSTR+WCAT, IB, CI)
+    print(kernel_vec.shape)
+    dvshape = (N, OH // VH, OW // VW, VH*HSTR + KH-1, VW*WSTR + KW-1, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
 
     if (TPAD != 0 and RPAD != 0):
-        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, CI_PAD), name="data_pad")
-    elif CI_PAD != 0:
-        data_pad = pad(data_q, (0, 0, 0, 0, 0), (0, 0, 0, 0, CI_PAD), name="data_pad")
+        data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
     else:
         data_pad = data_q
-
-    data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, b, ci: \
+    data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw,  b, ci: \
         data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][b][ci], name='data_vec')
+
+    print("Data vec shape", data_vec.shape)
     ci = tvm.reduce_axis((0, CI), name='ci')
     dh = tvm.reduce_axis((0, KH), name='dh')
     dw = tvm.reduce_axis((0, KW), name='dw')
@@ -145,11 +149,11 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
                         << (kb + ib).astype('uint16')), axis=[dh, dw, kb, ib, ci])
     def _unipolar_conv(n, h, w, co, vh, vw, vc):
         return tvm.sum(
-            ((tvm.popcount(kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
-                           data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci].astype('int16')) -
+            ((tvm.popcount(kernel_vec[co, dh, dw, ci_o, kb, vc, ci_i].astype('int16') &
+                           data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci_o, ib, ci_i].astype('int16')) -
               tvm.popcount(~kernel_vec[co, dh, dw, kb, vc, ci].astype('int16') &
-                           data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ib, ci]).astype('int16'))
-             << (kb + ib).astype('int16')), axis=[dh, dw, kb, ib, ci])
+                           data_vec[n, h, w, vh*HSTR+dh, vw*WSTR+dw, ci_o, ib, ci_i]).astype('int16'))
+             << (kb + ib).astype('int16')), axis=[dh, dw, ci_o, kb, ci_i, ib, ci_o])
     if unipolar:
         conv_vec = tvm.compute(ovshape, _unipolar_conv, name='conv_vec', tag='unipolar')
     else:
@@ -169,7 +173,7 @@ def _inline_ukernel(intrin=True):
     src = open(f).read()
     return clang.create_llvm(src, options=["-O3", "--target=armv7-none-linux-gnueabihf", "-mcpu=cortex-a53", "-mfpu=neon"])
 
-def _intrin(m, k_i, w_b, x_b, unipolar):
+def _intrin(m, k_i, w_b, x_b, unipolar, ci):
     assert(m == 8)
     pack_dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')
@@ -188,7 +192,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
         z = tvm.compute((m,), lambda i:
                         tvm.sum(tvm.popcount(w[bw, i, k].astype(dtype) & x[bx, k].astype(dtype))
                                 << (bw+bx).astype(dtype), axis=[bw, bx, k]), name='z')
-
+    print("CI ", ci)
     Ab = tvm.decl_buffer(w.shape, w.dtype,
                         name="A",
                         offset_factor=1,
@@ -198,7 +202,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
                         name="B",
                         offset_factor=1,
                         data_alignment=k_i,
-                        strides=[tvm.var("s3"), 1])
+                        strides=[tvm.var("si"), 1])
 
     Cb = tvm.decl_buffer(z.shape, z.dtype,
                         name="C",
@@ -217,12 +221,16 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
                 half = ""
             if unipolar:
                 name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
+                print("Calling", name)
             else:
                 name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
+                print("Calling ", name)
+            print(aa.strides[0], aa.strides[1], aa.strides[2], bb.strides[0])
             ib.emit(tvm.call_extern("int32", name,
                                 aa.access_ptr("r"),
                                 bb.access_ptr("r"),
-                                cc.access_ptr("rw")))
+                                cc.access_ptr("rw"), 
+                                aa.strides[0]))
 
             return ib.get()
         def _reduce_reset():
@@ -233,7 +241,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
         def _reduce_update():
             return _body()
         return _body(), _reduce_reset(), _reduce_update()
-    with tvm.build_config(offset_factor=1):
+    with tvm.build_config(offset_factor=1, partition_const_loop=True):
         return tvm.decl_tensor_intrin(z.op, intrin_func, binds={w: Ab, x: Bb, z: Cb})
 
 # Old style
@@ -349,10 +357,9 @@ def _intrin_popcount(m, k_i, w_b, x_b, unipolar):
 def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
                                   conv_out, output, last, unipolar):
     _, _, _, _, _, IB, CI = data_vec.shape
-    _, KH, KW, KB, _, _ = kernel_vec.shape
+    _, KH, KW,  KB, _, _ = kernel_vec.shape
     KB = get_const_int(KB)
     IB = get_const_int(IB)
-
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
@@ -361,7 +368,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     if data_pad is not None:
         s[data_pad].compute_inline()
 
-    _, h, _, _, _, _, _ = s[data_vec].op.axis
+    _, h, _, _, _,  _, _ = s[data_vec].op.axis
     s[data_vec].parallel(h)
 
     #### Schedule kernel packing
@@ -371,8 +378,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
     kh, kw, kb, ib, ci = s[conv_out].op.reduce_axis
-
-    ci_o, ci_i = cfg['tile_ci'].apply(s, conv_out, ci)
+    ci_o, ci_i = s[conv_out].split(ci, cfg['tile_ci'].size[1])
     re_axes = cfg["reorder_0"].apply(s, conv_out,
                                      [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
 
@@ -383,9 +389,10 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
         # pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
         # s[conv_out].tensorize(kb, pc)
         # Inline intrinsics
-        pc = _intrin(VC, kfactor, KB, IB, unipolar)
+        print(KB, kb)
+        pc = _intrin(VC, kfactor, KB, IB, unipolar, cfg['tile_ci'].size[0])
         s[conv_out].tensorize(kb, pc)
-        s[conv_out].pragma(n, "import_llvm", _inline_ukernel(intrin=True))
+        s[conv_out].pragma(ci_o, "import_llvm", _inline_ukernel(intrin=True))
 
     n, h, w, co = s[last].op.axis
     co, vc = cfg['tile_co'].apply(s, last, co)

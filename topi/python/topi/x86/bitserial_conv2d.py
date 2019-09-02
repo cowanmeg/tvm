@@ -59,8 +59,8 @@ def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
-
-     ##### Schedule Data padding, and bitpacking
+     
+    ##### Schedule Data padding, and bitpacking
     if data_pad is not None:
         s[data_pad].compute_inline()
 
@@ -72,20 +72,21 @@ def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
     s[kernel_vec].parallel(co)
 
    ##### Schedule Convolution
-    n, co, oh, ow, vh, vw, vc = s[conv_out].op.axis
+    n, co, oh, ow, vh, vc, vw = s[conv_out].op.axis
     ci, kh, kw, ib, kb = s[conv_out].op.reduce_axis
 
-    # s[conv_out].reorder(n, oh, ow, co, vh, vw, dh, dw, ci, vc, b1, b2)
-    cfg["reorder_0"].apply(s, conv_out, [n, co, oh, ow, vc, vh, kh, kw, kb, ib, ci, vw])
-    cfg["ann_reduce"].apply(s, conv_out, [kb, ib, kh, kw],
-                            axis_lens=[get_const_int(kb.dom.extent),
-                                       get_const_int(ib.dom.extent),
-                                       get_const_int(kh.dom.extent),
-                                       get_const_int(kw.dom.extent)],
-                            max_unroll=16,
-                            cfg=cfg)
-
-    s[conv_out].vectorize(vc)
+    cfg["reorder_0"].apply(s, conv_out, [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vw, vc])
+    # cfg["ann_reduce"].apply(s, conv_out, [kb, ib, kh, kw],
+    #                         axis_lens=[get_const_int(kb.dom.extent),
+    #                                    get_const_int(ib.dom.extent),
+    #                                    get_const_int(kh.dom.extent),
+    #                                    get_const_int(kw.dom.extent)],
+    #                         max_unroll=16,
+    #                         cfg=cfg)
+    cfg["ann_spatial"].apply(s, conv_out, [vh, vw, vc],
+                             axis_lens=[VH, VW, VC],
+                             max_unroll=16,
+                             cfg=cfg)
 
     # # Schedule output
     n, co, h, w = s[last].op.axis
@@ -94,6 +95,12 @@ def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
     s[last].reorder(n, co, oh, ow, vh, vw, vc)
     if last != output:
         s[output].compute_inline()
+        cfg["ann_spatial"].apply(s, last, [vh, vw, vc],
+                                 axis_lens=[cfg['tile_oh'].size[-1],
+                                            cfg['tile_ow'].size[-1],
+                                            cfg['tile_co'].size[-1]],
+                                 max_unroll=16,
+                                 cfg=cfg)
     s[conv_out].compute_at(s[last], ow)
 
     s[last].parallel(co)

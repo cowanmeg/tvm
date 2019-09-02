@@ -104,7 +104,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
                                  [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
                                  policy='candidate', candidate=[
                                      [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i],
-                                     #[n, oh, ow, co, vh, vw, kw, ci_o, kh, kb, ib, vc, ci_i],
+                                     [n, oh, ow, co, vh, vw, kw, ci_o, kh, kb, ib, vc, ci_i],
                                      [n, oh, ow, co, vh, vw, ci_o, kw, kh, kb, ib, vc, ci_i]])
     # binary ops
     cfg.add_flop(2 * N * OH * OW * CO * CI * KH * KW * binary_op_multiplier(pack_dtype))

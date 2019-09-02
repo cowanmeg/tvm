@@ -458,9 +458,9 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     weight = (weight > 0).astype('int16')
     weight = _op.cast(etab.new_const(weight), 'int16')
     if etab.data_layout == 'NCHW':
-        q_weight = _op.nn.bitpack(weight, bits=1, pack_axis=1, bit_axis=0, pack_type='uint8')
+        q_weight = _op.nn.bitpack(weight, bits=etab.weight_bits, pack_axis=1, bit_axis=0, pack_type='uint8')
     else:
-        q_weight = _op.nn.bitpack(weight, bits=1, pack_axis=2, bit_axis=2, pack_type='uint8')
+        q_weight = _op.nn.bitpack(weight, bits=etab.weight_bits, pack_axis=2, bit_axis=2, pack_type='uint8')
     params = {'weight': q_weight,
               'kernel_size': [kernel_h, kernel_w],
               'strides': [stride_h, stride_w],
@@ -517,7 +517,7 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     weight = weightList[0].transpose([1, 0])
     weight = (weight > 0).astype('int16')
     weight = _op.cast(etab.new_const(weight), 'int16')
-    q_weight = _op.nn.bitpack(weight, bits=1, pack_axis=1, bit_axis=1, pack_type='uint8')
+    q_weight = _op.nn.bitpack(weight, bits=etab.weight_bits, pack_axis=1, bit_axis=1, pack_type='uint8')
     params = {
         'weight': q_weight,
         'units': weightList[0].shape[1],

@@ -1,6 +1,5 @@
 #include "stdint.h"
 #include "arm_neon.h"
-#include <stdio.h>
 
 extern "C" int reset(uint16_t* dst) {
     // Zero out the register
@@ -11,12 +10,12 @@ extern "C" int reset(uint16_t* dst) {
 }
 
 // 8x8x1
-extern "C" int update_unipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst) {
+extern "C" int update_unipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x8_t aa[8];
     int8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 8*i);
+        aa[i] = vld1_u8(src_a + i * a_str0);
     uint8x8_t b = vld1_u8(src_b);
     int16x8_t output = vld1q_s16(dst);
 
@@ -47,12 +46,12 @@ extern "C" int update_unipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, int16_t
     return 0;
 }
 
-extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst) {
+extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x8_t aa[8];
     int8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 8*i);
+        aa[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b = vld1_u8(src_b);
     int16x8_t output = vld1q_s16(dst);
 
@@ -67,7 +66,7 @@ extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1_u8(src_b + 8);
+    b = vld1_u8(src_b + b_str0);
     for(int i = 0; i < 8; i++) {
         uint8x8_t temp = vand_u8(aa[i], b);
         // not b and aa
@@ -97,15 +96,16 @@ extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
 }
 
 
-extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst) {
+extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     int8x8_t a[8];
 
     uint8x8_t aa[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 8*i);
+        aa[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b0 = vld1_u8(src_b);
-    uint8x8_t b1 = vld1_u8(src_b + 8);
+    uint8x8_t b1 = vld1_u8(src_b + b_str0);
     int16x8_t output = vld1q_s16(dst);
 
     // from racket phase 1: Manually unrolling from example because vshl must be constant
@@ -131,7 +131,7 @@ extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
 
     //Load bitplane 1 of a
      for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 64 + 8*i);
+        aa[i] = vld1_u8(src_a + a_str1 + 8*i);
 
     for(int i = 0; i < 8; i++) {
         uint8x8_t temp = vand_u8(aa[i], b0);
@@ -174,11 +174,12 @@ extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
     return 0;
 }
 
-extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
+extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1_u8(src_a + 8*i);
+        a[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b = vld1_u8(src_b);
     uint16x8_t output = vld1q_u16(dst);
 
@@ -205,12 +206,13 @@ extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t
     return 0;
 }
 
-extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
+extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x8_t aa[8];
     uint8x8_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 8*i);
+        aa[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b = vld1_u8(src_b);
     uint16x8_t output = vld1q_u16(dst);
 
@@ -221,7 +223,7 @@ extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1_u8(src_b + 8);
+    b = vld1_u8(src_b + b_str0);
     for(int i = 0; i < 8; i++) {
         uint8x8_t temp = vand_u8(aa[i], b);
         temp = vcnt_u8(temp);
@@ -246,15 +248,16 @@ extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t
     return 0;
 }
 
-extern "C" int update_bipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
+extern "C" int update_bipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x8_t a[8];
 
     uint8x8_t aa[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 8*i);
+        aa[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b0 = vld1_u8(src_b);
-    uint8x8_t b1 = vld1_u8(src_b + 8);
+    uint8x8_t b1 = vld1_u8(src_b + b_str0);
     uint16x8_t output = vld1q_u16(dst);
 
     // from racket phase 1: Manually unrolling from example because vshl must be constant
@@ -272,7 +275,7 @@ extern "C" int update_bipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t
 
     //Load bitplane 1 of a
      for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + 64 + 8*i);
+        aa[i] = vld1_u8(src_a + a_str1 + i*a_str0);
 
     for(int i = 0; i < 8; i++) {
         uint8x8_t temp = vand_u8(aa[i], b0);
@@ -310,12 +313,13 @@ extern "C" int update_bipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t
 }
 
 ///// 8x16x1 microkernels
-extern "C" int update_unipolar_a1b1(uint8_t* src_a, uint8_t* src_b, int16_t* dst) {
+extern "C" int update_unipolar_a1b1(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x16_t aa[8];
     int8x16_t a[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1q_u8(src_a + 16*i);
+        aa[i] = vld1q_u8(src_a + i*a_str0);
     uint8x16_t b = vld1q_u8(src_b);
     int16x8_t output = vld1q_s16(dst);
 
@@ -371,7 +375,8 @@ extern "C" int update_unipolar_a1b1(uint8_t* src_a, uint8_t* src_b, int16_t* dst
     return 0;
 }
 
-extern "C" int update_unipolar_a1b2(uint8_t* src_a, uint8_t* src_b, int16_t* dst) {
+extern "C" int update_unipolar_a1b2(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     int8x16_t x[8];
     int16x8_t output = vld1q_s16(dst);
@@ -383,7 +388,7 @@ extern "C" int update_unipolar_a1b2(uint8_t* src_a, uint8_t* src_b, int16_t* dst
 
     uint8x16_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1q_u8(src_a + 16*i);
+        a[i] = vld1q_u8(src_a + i*a_str0);
     uint8x16_t b = vld1q_u8(src_b);
             
 
@@ -398,7 +403,7 @@ extern "C" int update_unipolar_a1b2(uint8_t* src_a, uint8_t* src_b, int16_t* dst
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1q_u8(src_b + 16);
+    b = vld1q_u8(src_b + b_str0);
     for(int i = 0; i < 8; i++) {
         uint8x16_t temp = vandq_u8(a[i], b);
         // not b and aa
@@ -452,16 +457,13 @@ extern "C" int update_unipolar_a1b2(uint8_t* src_a, uint8_t* src_b, int16_t* dst
     return 0;
 }
 
-extern "C" int update_bipolar_a1b1(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
-int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
-    //src_a = src_a + a_off;
-    //src_b = src_b + b_off;
-    //dst = dst + c_off;
+extern "C" int update_bipolar_a1b1(uint8_t* src_a, uint8_t* src_b, uint16_t* dst,  
+    int a_str1, int a_str0, int b_str0){
 
     // todo - data loading
     uint8x16_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1q_u8(src_a + i*a_s1);
+        a[i] = vld1q_u8(src_a + i*a_str0);
     uint8x16_t b = vld1q_u8(src_b);
     uint16x8_t output = vld1q_u16(dst);
 
@@ -515,8 +517,8 @@ int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
 
 }
 
-extern "C" int update_bipolar_a1b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst,
-int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
+extern "C" int update_bipolar_a1b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x16_t x[8];
     uint16x8_t output = vld1q_u16(dst);
@@ -528,7 +530,7 @@ int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
 
     uint8x16_t a[8];
     for(int i = 0; i < 8; i++)
-        a[i] = vld1q_u8(src_a + a_s1*i);
+        a[i] = vld1q_u8(src_a + a_str0*i);
     uint8x16_t b = vld1q_u8(src_b);
             
 
@@ -539,7 +541,7 @@ int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
     }
 
     // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1q_u8(src_b + b_s0);
+    b = vld1q_u8(src_b + b_str0);
     for(int i = 0; i < 8; i++) {
         uint8x16_t temp = vandq_u8(a[i], b);
         temp = vcntq_u8(temp);
@@ -589,15 +591,16 @@ int a_off, int a_s0, int a_s1, int b_off, int b_s0, int c_off){
     return 0;
 }
 
-extern "C" int update_bipolar_a2b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst) {
+extern "C" int update_bipolar_a2b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
     // todo - data loading
     uint8x16_t x[8];
 
     uint8x16_t aa[8];
     for(int i = 0; i < 8; i++)
-        aa[i] = vld1q_u8(src_a + 16*i);
+        aa[i] = vld1q_u8(src_a + i*a_str0);
     uint8x16_t b0 = vld1q_u8(src_b);
-    uint8x16_t b1 = vld1q_u8(src_b + 16);
+    uint8x16_t b1 = vld1q_u8(src_b + b_str0);
     uint16x8_t output = vld1q_u16(dst);
 
     // from racket phase 1: Manually unrolling from example because vshl must be constant
@@ -615,7 +618,7 @@ extern "C" int update_bipolar_a2b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst
 
     //Load bitplane 1 of a
      for(int i = 0; i < 8; i++)
-        aa[i] = vld1q_u8(src_a + 128 + 16*i);
+        aa[i] = vld1q_u8(src_a + a_str1 + i*a_str0);
 
     for(int i = 0; i < 8; i++) {
         uint8x16_t temp = vandq_u8(aa[i], b0);

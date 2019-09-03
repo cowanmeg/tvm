@@ -56,6 +56,7 @@ def schedule_bitserial_conv2d(cfg, outs):
 
 def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
                                     conv_out, output, last):
+
     VC = cfg["tile_co"].size[-1]
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
@@ -76,13 +77,13 @@ def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
     ci, kh, kw, ib, kb = s[conv_out].op.reduce_axis
 
     cfg["reorder_0"].apply(s, conv_out, [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vw, vc])
-    # cfg["ann_reduce"].apply(s, conv_out, [kb, ib, kh, kw],
-    #                         axis_lens=[get_const_int(kb.dom.extent),
-    #                                    get_const_int(ib.dom.extent),
-    #                                    get_const_int(kh.dom.extent),
-    #                                    get_const_int(kw.dom.extent)],
-    #                         max_unroll=16,
-    #                         cfg=cfg)
+    cfg["ann_reduce"].apply(s, conv_out, [kb, ib, kh, kw],
+                            axis_lens=[get_const_int(kb.dom.extent),
+                                       get_const_int(ib.dom.extent),
+                                       get_const_int(kh.dom.extent),
+                                       get_const_int(kw.dom.extent)],
+                            max_unroll=16,
+                            cfg=cfg)
     cfg["ann_spatial"].apply(s, conv_out, [vh, vw, vc],
                              axis_lens=[VH, VW, VC],
                              max_unroll=16,

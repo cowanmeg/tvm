@@ -253,8 +253,7 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     TW = W + LPAD + RPAD
     OH = (TH - KH) // HSTR + 1
     OW = (TW - KW) // WSTR + 1
-    print(TH, TW, OH, OW)
-     # ==================== define configuration space ====================
+    # ==================== define configuration space ====================
     n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
     ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
     ib, kb = cfg.reduce_axis(in_bits), cfg.reduce_axis(weight_bits)

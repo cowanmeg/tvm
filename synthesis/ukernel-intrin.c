@@ -95,6 +95,191 @@ extern "C" int update_unipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
     return 0;
 }
 
+extern "C" int update_unipolar_a2b1_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
+    // todo - data loading
+    int8x8_t a[8];
+
+    uint8x8_t aa[8];
+    for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + i*a_str0);
+    uint8x8_t b0 = vld1_u8(src_b);
+    int16x8_t output = vld1q_s16(dst);
+
+    // from racket phase 1: Manually unrolling from example because vshl must be constant
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        a[i] = vsub_s8(temp, temp2);
+    }
+    
+    //Load bitplane 1 of a
+     for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + a_str1 + 8*i);
+
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        int8x8_t temp3 = vsub_s8(temp, temp2);
+        temp3 = vshl_n_s8(temp3, 1);
+        a[i] = vadd_s8(a[i], temp3);
+    }
+    
+    // from racket phase 2
+    int8x8_t d0_ = vpadd_s8(a[0], a[1]);
+    int8x8_t d1_ = vpadd_s8(a[2], a[3]);
+    int8x8_t d2_ = vpadd_s8(a[4], a[5]);
+    int8x8_t d3_ = vpadd_s8(a[6], a[7]);
+
+    int16x8_t q0_ = vpaddlq_s8(vcombine_s8(d0_, d1_));
+    int16x8_t q1_ = vpaddlq_s8(vcombine_s8(d2_, d3_));
+    int16x4_t d0__  = vpadd_s16(vget_low_s16(q0_), vget_high_s16(q0_));
+    int16x4_t d1__  = vpadd_s16(vget_low_s16(q1_), vget_high_s16(q1_));
+    // accumulate
+    int16x8_t d0____ = vaddq_s16(output, vcombine_s16(d0__, d1__));
+
+    // todo data writebacks
+    vst1q_s16(dst, d0____);
+    return 0;
+}
+
+extern "C" int update_unipolar_a1b3_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
+    // todo - data loading
+    int8x8_t a[8];
+
+    uint8x8_t aa[8];
+    for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + i*a_str0);
+    uint8x8_t b0 = vld1_u8(src_b);
+    uint8x8_t b1 = vld1_u8(src_b + b_str0);
+    uint8x8_t b1 = vld1_u8(src_b + 2 * b_str0);
+    int16x8_t output = vld1q_s16(dst);
+
+    // from racket phase 1: Manually unrolling from example because vshl must be constant
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        a[i] = vsub_s8(temp, temp2);
+    }
+    
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b1);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b1, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        int8x8_t temp3 = vsub_s8(temp, temp2);
+        temp3 = vshl_n_s8(temp3, 1);
+        a[i] = vadd_s8(a[i], temp3);
+    }
+
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b2);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b2, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        int8x8_t temp3 = vsub_s8(temp, temp2);
+        temp3 = vshl_n_s8(temp3, 2);
+        a[i] = vadd_s8(a[i], temp3);
+    }
+
+    // from racket phase 2
+    int8x8_t d0_ = vpadd_s8(a[0], a[1]);
+    int8x8_t d1_ = vpadd_s8(a[2], a[3]);
+    int8x8_t d2_ = vpadd_s8(a[4], a[5]);
+    int8x8_t d3_ = vpadd_s8(a[6], a[7]);
+
+    int16x8_t q0_ = vpaddlq_s8(vcombine_s8(d0_, d1_));
+    int16x8_t q1_ = vpaddlq_s8(vcombine_s8(d2_, d3_));
+    int16x4_t d0__  = vpadd_s16(vget_low_s16(q0_), vget_high_s16(q0_));
+    int16x4_t d1__  = vpadd_s16(vget_low_s16(q1_), vget_high_s16(q1_));
+    // accumulate
+    int16x8_t d0____ = vaddq_s16(output, vcombine_s16(d0__, d1__));
+
+    // todo data writebacks
+    vst1q_s16(dst, d0____);
+    return 0;
+}
+
+extern "C" int update_unipolar_a3b1_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
+    // todo - data loading
+    int8x8_t a[8];
+
+    uint8x8_t aa[8];
+    for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + i*a_str0);
+    uint8x8_t b0 = vld1_u8(src_b);
+    int16x8_t output = vld1q_s16(dst);
+
+    // from racket phase 1: Manually unrolling from example because vshl must be constant
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        a[i] = vsub_s8(temp, temp2);
+    }
+    
+    //Load bitplane 1 of a
+     for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + a_str1 + 8*i);
+
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        int8x8_t temp3 = vsub_s8(temp, temp2);
+        temp3 = vshl_n_s8(temp3, 1);
+        a[i] = vadd_s8(a[i], temp3);
+    }
+
+    //Load bitplane 2 of a
+     for(int i = 0; i < 8; i++)
+        aa[i] = vld1_u8(src_a + 2*a_str1 + 8*i);
+
+    for(int i = 0; i < 8; i++) {
+        uint8x8_t temp = vand_u8(aa[i], b0);
+        // not b and aa
+        uint8x8_t temp2 = vbic_u8(b0, aa[i]);
+        temp = vcnt_u8(temp);
+        temp2 = vcnt_u8(temp2);
+        int8x8_t temp3 = vsub_s8(temp, temp2);
+        temp3 = vshl_n_s8(temp3, 1);
+        a[i] = vadd_s8(a[i], temp3);
+    }
+    
+    // from racket phase 2
+    int8x8_t d0_ = vpadd_s8(a[0], a[1]);
+    int8x8_t d1_ = vpadd_s8(a[2], a[3]);
+    int8x8_t d2_ = vpadd_s8(a[4], a[5]);
+    int8x8_t d3_ = vpadd_s8(a[6], a[7]);
+
+    int16x8_t q0_ = vpaddlq_s8(vcombine_s8(d0_, d1_));
+    int16x8_t q1_ = vpaddlq_s8(vcombine_s8(d2_, d3_));
+    int16x4_t d0__  = vpadd_s16(vget_low_s16(q0_), vget_high_s16(q0_));
+    int16x4_t d1__  = vpadd_s16(vget_low_s16(q1_), vget_high_s16(q1_));
+    // accumulate
+    int16x8_t d0____ = vaddq_s16(output, vcombine_s16(d0__, d1__));
+
+    // todo data writebacks
+    vst1q_s16(dst, d0____);
+    return 0;
+}
 
 extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t* dst, 
     int a_str1, int a_str0, int b_str0){

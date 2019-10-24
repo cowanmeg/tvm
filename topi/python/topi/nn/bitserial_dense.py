@@ -101,16 +101,18 @@ def bitserial_dense_default(cfg, data, weight, data_bits, weight_bits, pack_dtyp
 
     cfg.define_reorder('reorder_0', [yo, xo, ko, yi, wb, db, ki, xi],
                        policy='candidate', candidate=[
+                           [yo, xo, ko, xi, wb, db, ki, yi],
+                           [yo, xo, ko, wb, db, xi, ki, yi],
                            [yo, xo, ko, yi, wb, db, ki, xi],
                            [yo, xo, yi, ko, wb, db, ki, xi]])
 
     cfg.define_annotate('ann_reduce', [db, wb], policy='try_unroll')
-    cfg.define_annotate('ann_spatial', [yi, xi], policy='try_unroll_vec')
+    cfg.define_annotate('ann_spatial', [yi, xi, ki], policy='try_unroll_vec')
 
     ###### Compute rule
     VX = cfg['tile_x'].size[-1]
 
-    wvshape = (X//VX, WB, VX, K)
+    wvshape = (X//VX, WB, K, VX)
     oshape = (Y, X)
 
     k = tvm.reduce_axis((0, K), name='k')
@@ -118,12 +120,12 @@ def bitserial_dense_default(cfg, data, weight, data_bits, weight_bits, pack_dtyp
     wb = tvm.reduce_axis((0, WB), name='wb')
 
     # Tile data and weights
-    weight_vec = tvm.compute(wvshape, lambda xo, wb, vx, k:
+    weight_vec = tvm.compute(wvshape, lambda xo, wb, k, vx:
                              weight_packed[xo*VX+vx][wb][k], name='weight_vec')
 
     matmul_unipolar = tvm.compute(oshape, lambda i, j: tvm.sum(
-        (tvm.popcount(weight_vec[j//VX, wb, j%VX, k] & data_packed[i, db, k]) -
-         tvm.popcount(~weight_vec[j//VX, wb, j%VX, k] & data_packed[i, db, k])).astype(out_dtype)
+        (tvm.popcount(weight_vec[j//VX, wb, k, j%VX] & data_packed[i, db, k]) -
+         tvm.popcount(~weight_vec[j//VX, wb, k, j%VX] & data_packed[i, db, k])).astype(out_dtype)
         << (db+wb).astype(out_dtype), axis=[wb, db, k]), tag='bitserial_dense_unipolar')
 
     matmul = tvm.compute(oshape, lambda i, j: tvm.sum(

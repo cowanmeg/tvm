@@ -52,7 +52,6 @@ def schedule_bitserial_dense(cfg, outs):
         xo, xi = cfg["tile_x"].apply(s, output, x)
         ko, ki = cfg["tile_k"].apply(s, output, k)
 
-
         cfg["reorder_0"].apply(s, output, [yo, xo, ko, yi, wb, db, ki, xi])
         cfg["ann_reduce"].apply(s, output, [db, wb],
                                 axis_lens=[get_const_int(db.dom.extent),

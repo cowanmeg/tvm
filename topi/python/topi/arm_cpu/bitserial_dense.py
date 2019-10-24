@@ -125,6 +125,7 @@ def schedule_bitserial_dense(cfg, outs):
     s: Schedule
         The computation schedule for bitserial_dense.
     """
+    print("ARM schedule for dense")
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
@@ -169,8 +170,9 @@ def schedule_bitserial_dense(cfg, outs):
         elif op.tag == 'bitserial_dense' or 'bitserial_dense_unipolar':
             output = op.output(0)
             weight_vec = op.input_tensors[0]
-
+            #weight_vect = weightq.op.output_tensors[0]
             data_vec = op.input_tensors[1]
+            print(weight_vec, data_vec)
             data = data_vec.op.input_tensors[0]
             if "QuantizeInput" in data.op.name:
                 data = data.op.input_tensors[0]

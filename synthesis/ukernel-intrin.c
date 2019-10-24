@@ -159,7 +159,7 @@ extern "C" int update_unipolar_a1b3_half(uint8_t* src_a, uint8_t* src_b, int16_t
         aa[i] = vld1_u8(src_a + i*a_str0);
     uint8x8_t b0 = vld1_u8(src_b);
     uint8x8_t b1 = vld1_u8(src_b + b_str0);
-    uint8x8_t b1 = vld1_u8(src_b + 2 * b_str0);
+    uint8x8_t b2 = vld1_u8(src_b + 2 * b_str0);
     int16x8_t output = vld1q_s16(dst);
 
     // from racket phase 1: Manually unrolling from example because vshl must be constant
@@ -349,8 +349,8 @@ extern "C" int update_unipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, int16_t
 
     int16x8_t q0_ = vpaddlq_s8(vcombine_s8(d0_, d1_));
     int16x8_t q1_ = vpaddlq_s8(vcombine_s8(d2_, d3_));
-    int16x4_t d0__  = vpadd_s16(vget_low_s16(q0_), vget_high_s16(q0_));
-    int16x4_t d1__  = vpadd_s16(vget_low_s16(q1_), vget_high_s16(q1_));
+    int16x4_t d0__  = vpadd_s16(vget_high_s16(q0_), vget_low_s16(q0_));
+    int16x4_t d1__  = vpadd_s16(vget_high_s16(q1_), vget_low_s16(q1_));
     // accumulate
     int16x8_t d0____ = vaddq_s16(output, vcombine_s16(d0__, d1__));
 

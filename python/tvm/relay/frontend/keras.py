@@ -469,6 +469,7 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'weight_bits': etab.weight_bits,
               'out_dtype': 'int16',
               'pack_dtype': 'uint8',
+              'kernel_layout': kernel_layout,
               'data_layout': etab.data_layout}
     params['channels'] = n_filters
     if keras_layer.padding == 'valid':
@@ -547,7 +548,7 @@ def quantize(x, abits, etab):
 
 # Dequantize: Maps low bit int back to floating point
 def dquantize(x, keras_layer, etab):
-    wbits = 1
+    wbits = etab.weight_bits
     abits = keras_layer.bits
     x = _op.cast(x, dtype='float32')
     x = x * _op.cast(_expr.const(1.0 / (((2.0 ** abits)-1)*((2.0 ** wbits)-1))), 'float32')

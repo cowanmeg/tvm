@@ -44,6 +44,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, VCI, use_bitpack=True
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits,
                       pack_dtype, out_dtype, unipolar):
     """ Compute convolution with pack on spatial axes. """
+    print("ARM conv2d nhwc")
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
     if unipolar:
@@ -71,7 +72,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     PAD_W = W + (LPAD + RPAD)
     OH = (PAD_H - KH) // HSTR + 1
     OW = (PAD_W - KW) // WSTR + 1
-    oshape = (1, OH, OW, CO)
+    oshape = (N, OH, OW, CO)
 
     # Pad input channels of weights and data when it is not a multiple of 8
 #    if CI_packed % 8 != 0:
@@ -92,12 +93,8 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     # Microkernel constraints
     co, vc = cfg.define_split('tile_co', co, policy='all', num_outputs=2,
                               filter=lambda x: x.size[-1] == 8)
-    if CI_packed == 8:
-        ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
-                                filter=lambda x: x.size[-1] == 8)
-    else:
-        ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
-                                    filter=lambda x: x.size[-1] == 16)
+    ci_o, ci_i = cfg.define_split("tile_ci", ci, num_outputs=2,
+                                filter=lambda x: x.size[-1] == 8 or x.size[-1] == 16)
 
     # Innermost 4 axis fixed for microkernel
     re_axes = cfg.define_reorder("reorder_0",
@@ -126,7 +123,7 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     dvshape = (N, OH // VH, OW // VW, VH*HSTR + KH-1, VW*WSTR + KW-1, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
 
-    if (TPAD != 0 and RPAD != 0):
+    if (DPAD != 0 or TPAD != 0):
         data_pad = pad(data_q, (0, TPAD, LPAD, 0, 0), (0, DPAD, RPAD, 0, 0), name="data_pad")
     else:
         data_pad = data_q
@@ -170,7 +167,7 @@ def _inline_ukernel(intrin=True):
     src = open(f).read()
     return clang.create_llvm(src, options=["-O3", "--target=armv7-none-linux-gnueabihf", "-mcpu=cortex-a53", "-mfpu=neon"])
 
-def _intrin(m, k_i, w_b, x_b, unipolar, ci):
+def _intrin(m, k_i, w_b, x_b, unipolar):
     assert(m == 8)
     pack_dtype = 'uint8'
     w = tvm.placeholder((w_b, m, k_i), dtype=pack_dtype, name='w')
@@ -217,7 +214,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar, ci):
                 half = ""
             if unipolar:
                 name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
-                # print("Calling", name)
+                #print("Calling", name)
             else:
                 name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
                 # print("Calling ", name)
@@ -385,7 +382,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
         #pc = _intrin_popcount(VC, kfactor, KB, IB, unipolar)
         #s[conv_out].tensorize(kb, pc)
         # Inline intrinsics
-        pc = _intrin(VC, kfactor, KB, IB, unipolar, cfg['tile_ci'].size[0])
+        pc = _intrin(VC, kfactor, KB, IB, unipolar)
         s[conv_out].tensorize(kb, pc)
         s[conv_out].pragma(ci_o, "import_llvm", _inline_ukernel(intrin=True))
 

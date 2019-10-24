@@ -219,13 +219,13 @@ def bitserial_conv2d_nhwc(data, kernel, stride, padding, activation_bits, weight
 
     return conv
 
-@autotvm.register_topi_compute(bitserial_conv2d_nchw, ['cpu', 'arm_cpu'], 'direct')
+@autotvm.register_topi_compute(bitserial_conv2d_nchw, ['cpu'], 'direct')
 def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
                       pack_dtype='uint32', out_dtype='int16', unipolar=True):
     """ Compute convolution with pack on spatial axes. """
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     if len(data.shape) == 4:
-        data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=0, pack_type=pack_dtype)
+        data_q = bitpack(data, in_bits, pack_axis=1, bit_axis=1, pack_type=pack_dtype)
     else:
         data_q = data
     # Check if kernel is already bitpacked
@@ -266,13 +266,15 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     cfg.define_reorder("reorder_0",
                        [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vw, vc],
                        policy='candidate', candidate=[
-                           [n, co, oh, ow, kh, kw, kb, ib, vh, vw, ci, vc],
-                           [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vc, vw],
-                           [n, co, oh, ow, kh, kw, kb, ib, ci, vc, vh, vw]
+                           [n, co, oh, ow, ci, kb, ib, kh, kw, vh, vw, vc],
+                           [n, co, oh, ow, ci, kh, kw, kb, ib, vh, vw, vc],
+                           [n, co, oh, ow, ci, vh, vw, kh, kw, kb, ib, vc],
+                           [n, co, oh, ow, ci, kb, ib, kh, kw, vc, vh, vw],
+                           [n, co, oh, ow, ci, kh, kw, kb, ib, vc, vh, vw]
                            ])
 
     cfg.define_annotate('ann_reduce', [ib, kb, kh, kw], policy='try_unroll')
-    cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
+    cfg.define_annotate("ann_spatial", [vw, vc], policy='try_unroll_vec')
 
     # binary ops
     cfg.add_flop(2 * N * OH * OW * CO * CI * KH * KW * binary_op_multiplier(pack_dtype))
@@ -292,8 +294,8 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     else:
         data_pad = data_q
 
-    data_vec = tvm.compute(dvshape, lambda n, h, w, ci, vh, vw, b: \
-        data_pad[b][n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw], name='data_vec')
+    data_vec = tvm.compute(dvshape, lambda n, h, w, ci, b, vh, vw: \
+        data_pad[n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw][b], name='data_vec')
 
     kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
         kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')
@@ -308,15 +310,15 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
         b1b2 = (b1+b2).astype(out_dtype)
         if unipolar:
             return tvm.sum((tvm.popcount(
-                data_vec[n, h, w, ci, vh*HSTR+dh, vw*WSTR+dw, b1].astype(out_dtype) &
+                data_vec[n, h, w, ci, b1, vh*HSTR+dh, vw*WSTR+dw].astype(out_dtype) &
                 kernel_vec[co, ci, dh, dw, b2, vc].astype(out_dtype))  -
                             tvm.popcount(
-                                data_vec[n, h, w, ci, vh*HSTR+dh, vw*WSTR+dw, b1].astype(out_dtype)
+                                data_vec[n, h, w, ci, b1, vh*HSTR+dh, vw*WSTR+dw].astype(out_dtype)
                                 & ~kernel_vec[co, ci, dh, dw, b2, vc]).astype(out_dtype)) << b1b2,
                            axis=[ci, dh, dw, b1, b2])
 
         return tvm.sum((tvm.popcount(
-            data_vec[n, h, w, ci, vh*HSTR+dh, vw*WSTR+dw, b1] &
+            data_vec[n, h, w, ci, b1, vh*HSTR+dh, vw*WSTR+dw] &
             kernel_vec[co, ci, dh, dw, b2, vc])).astype(out_dtype) << b1b2,
                        axis=[ci, dh, dw, b1, b2])
 

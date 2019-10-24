@@ -75,7 +75,6 @@ def _schedule_bitserial_conv2d_nchw(cfg, s, data_pad, data_vec, kernel_vec,
    ##### Schedule Convolution
     n, co, oh, ow, vh, vc, vw = s[conv_out].op.axis
     ci, kh, kw, ib, kb = s[conv_out].op.reduce_axis
-
     cfg["reorder_0"].apply(s, conv_out, [n, co, oh, ow, kh, kw, kb, ib, ci, vh, vw, vc])
     cfg["ann_reduce"].apply(s, conv_out, [kb, ib, kh, kw],
                             axis_lens=[get_const_int(kb.dom.extent),

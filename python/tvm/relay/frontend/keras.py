@@ -192,6 +192,7 @@ def _convert_dense(inexpr, keras_layer, etab):
 
 
 def _convert_convolution(inexpr, keras_layer, etab):
+    print("Convolution!")
     _check_data_format(keras_layer)
     is_deconv = type(keras_layer).__name__ == 'Conv2DTranspose'
     is_depthconv = type(keras_layer).__name__ == 'DepthwiseConv2D'
@@ -435,6 +436,19 @@ def _convert_enter_integer(inexpr, keras_layer, etab):
     return inexpr
 
 
+def _convert_sawb_conv2d(inexpr, keras_layer, etab):
+    # TODO get multiplier from weights
+    scale = _expr.const(2.0)
+    wbits = etab.weight_bits
+    abits = keras_layer.bits
+
+    x = _convert_bitserial_convolution(inexpr, keras_layer, etab)
+
+    x = _op.cast(x, dtype='float32')
+    x = x * scale
+    x = x * _op.cast(_expr.const(1.0 / (((2.0 ** abits)-1)*((2.0 ** wbits)-1))), 'float32')
+    return x
+
 def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     # TODO: currently hardcoded to rpi data types.
     _check_data_format(keras_layer)
@@ -465,7 +479,7 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'kernel_size': [kernel_h, kernel_w],
               'strides': [stride_h, stride_w],
               'padding': [0, 0],
-              'activation_bits': keras_layer.bits,
+              'activation_bits': int(keras_layer.bits),
               'weight_bits': etab.weight_bits,
               'out_dtype': 'int16',
               'pack_dtype': 'uint8',
@@ -616,6 +630,10 @@ def _convert_scalu(inexpr, keras_layer, etab):
     scale = etab.new_const(keras_layer.get_weights()[0])
     return _op.cast(inexpr, 'float32') * scale
 
+def _convert_pact(inexpr, keras_layer, etab):
+    alpha = 1.0 # TODO: Need to read from weights!!
+    x = _op.clip(inexpr, 0.0, alpha)
+    return _op.cast(inexpr, 'int8')
 
 def _convert_batchnorm(inexpr, keras_layer, etab):
     if etab.data_layout == 'NCHW' or len(keras_layer.input_shape) < 4:
@@ -838,6 +856,8 @@ _convert_map = {
     'BinaryDense'              : _convert_bitserial_dense,
     'ShiftNormalization'       : _convert_shiftnorm,
     'Scalu'                    : _convert_scalu,
+    'PACT'                     : _convert_pact,
+    'SAWBConv2D'               : _convert_sawb_conv2d,
 
     # 'ZeroPadding1D'          : _convert_padding,
     # 'AveragePooling1D'       : _convert_pooling,
@@ -927,6 +947,7 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
     params : dict of str to tvm.NDArray
         The parameter dict to be used by Relay.
     """
+    print("Entering from_keras")
     try:
         import tensorflow.keras as keras
     except ImportError:
@@ -1009,7 +1030,7 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
                 # Remember previous layer for some of the bitserial operators
                 #keras_layer.previous_layer = previous_layer
                 #previous_layer = keras_layer
-                # print(op_name)
+                print(op_name)
                 keras_op_to_relay(inexpr, keras_layer, op_name, etab)
     # model._output_coordinates contains out_node(oc[0]), node_index(oc[1]) and tensor_index(oc[2])
     # Get all output nodes in etab using the name made from above values.

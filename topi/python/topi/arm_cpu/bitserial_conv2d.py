@@ -44,7 +44,7 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, VCI, use_bitpack=True
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits,
                       pack_dtype, out_dtype, unipolar):
     """ Compute convolution with pack on spatial axes. """
-    print("ARM conv2d nhwc")
+    #print("ARM conv2d nhwc")
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
     if unipolar:
@@ -347,7 +347,7 @@ def _intrin_popcount(m, k_i, w_b, x_b, unipolar):
         return tvm.decl_tensor_intrin(z.op, _intrin_func, binds={w: Wb, x:Xb, z:Zb})
 
 # ARM specific schedule that using custom microkernel
-def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
+def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec, kernel_vec,
                                   conv_out, output, last, unipolar):
     _, _, _, _, _, IB, CI = data_vec.shape
     _, KH, KW,  KB, _, _ = kernel_vec.shape
@@ -361,12 +361,21 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     if data_pad is not None:
         s[data_pad].compute_inline()
 
-    _, h, _, _, _,  _, _ = s[data_vec].op.axis
-    s[data_vec].parallel(h)
+    s[data_q].compute_inline()
+
+    _, h, w, _, _,  _, x = s[data_vec].op.axis
+    fused = s[data_vec].fuse(h, w)
+    s[data_vec].parallel(fused)
+    s[data_vec].vectorize(x)
+    # print(cfg)
+    # print(s[data_vec].op.axis)
+    # print("Parallel and vectorize", fused, x)
 
     #### Schedule kernel packing
-    co, _, _, _, _, _ = s[kernel_vec].op.axis
-    s[kernel_vec].parallel(co)
+    if autotvm.GLOBAL_SCOPE.in_tuning:
+        # Will be prepacked during inference - ignore during tuning
+        co, _, _, _, _, _ = s[kernel_vec].op.axis
+        s[kernel_vec].parallel(co)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
@@ -374,6 +383,10 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     ci_o, ci_i = s[conv_out].split(ci, cfg['tile_ci'].size[1])
     re_axes = cfg["reorder_0"].apply(s, conv_out,
                                      [n, oh, ow, co, vh, vw, kh, kw, ci_o, kb, ib, vc, ci_i])
+
+    # s[conv_out].unroll(kh)
+    # s[conv_out].unroll(kw)
+    s[conv_out].unroll(ci_o)
 
     # Use microkernel
     kfactor = cfg['tile_ci'].size[1]
@@ -391,12 +404,13 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
     oh, vh = cfg['tile_oh'].apply(s, last, h)
     ow, vw = cfg['tile_ow'].apply(s, last, w)
     s[last].reorder(n, oh, ow, co, vh, vw, vc)
-    # s[last].vectorize(vc) # Does nothing since the conv out is vectorized
+
     if last != output:
         s[output].compute_inline()
 
     s[conv_out].compute_at(s[last], co)
     oh_ow = s[last].fuse(oh, ow)
+    s[last].vectorize(vc)
     s[last].parallel(oh_ow)
     return s
 
@@ -423,7 +437,7 @@ def schedule_bitserial_conv2d_nhwc(cfg, outs):
                 data_q = data
                 data = data.op.input_tensors[0]
             unipolar = "unipolar" in conv_out.op.tag
-            _schedule_spatial_conv2d_nhwc(cfg, s, data_pad, data_vec, kernel_vec,
+            _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec, kernel_vec,
                                           conv_out, output, outs[0], unipolar)
 
     traverse_inline(s, outs[0].op, _callback)

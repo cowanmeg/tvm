@@ -26,7 +26,7 @@ import tvm
 from tvm import autotvm
 import tvm.contrib.nnpack
 
-from ..generic import schedule_conv2d_nchw, schedule_conv2d_winograd_without_weight_transform, \
+from ..generic import schedule_conv2d_nchw, schedule_conv2d_nhwc, schedule_conv2d_winograd_without_weight_transform, \
                       schedule_conv2d_winograd_nnpack_without_weight_transform
 from ..util import traverse_inline, get_const_tuple, const_matrix
 from ..nn import dilate, pad, conv2d, conv2d_alter_layout, \
@@ -76,10 +76,11 @@ def conv2d_arm_cpu(cfg, data, kernel, strides, padding, dilation, layout, out_dt
         return _decl_spatial_pack(cfg, data, kernel, strides, padding, dilation, layout, out_dtype,
                                   num_tile=2)
     else:
-        return _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, layout,
-                                       out_dtype, num_tile=2)
+        return _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation,
+                                       out_dtype)
 
 
+@autotvm.register_topi_schedule(schedule_conv2d_nhwc, 'arm_cpu', ['direct'])
 @autotvm.register_topi_schedule(
     schedule_conv2d_nchw, 'arm_cpu',
     ['direct', 'winograd', 'winograd_nnpack_fp16', 'winograd_nnpack_fp32'])
@@ -248,89 +249,109 @@ def _decl_spatial_pack(cfg, data, kernel, strides, padding, dilation, layout, ou
                          name='output_unpack', tag='spatial_conv2d_output')
     return output
 
-def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, layout, out_dtype, num_tile):
-    assert layout == "NHWC", "Only support NHWC"
-    # create workload according to raw arguments
-    out_dtype = out_dtype or data.dtype
-    N, IH, IW, CI = get_const_tuple(data.shape)
-   
-    # TODO? Dilation
+# def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, layout, out_dtype, num_tile):
+#     assert layout == "NHWC", "Only support NHWC"
+#     # create workload according to raw arguments
+#     out_dtype = out_dtype or data.dtype
+#     N, IH, IW, CI = get_const_tuple(data.shape)
+#     print(data, kernel)
+#     # if len(kernel.shape) == 4:
+#     pre_packed = False
+#     KH, KW, _, CO = get_const_tuple(kernel.shape)
+#     print("Kernel shapes", KH, KW, CI, CO)
+#     # else:
+#     #     pre_packed = True
+#     #     CO, _, KH, KW, VC = get_const_tuple(kernel.shape)
+#     #     CO = CO * VC
+#     pad_top, pad_left, pad_bottom, pad_right = get_pad_tuple( padding, (KH, KW))
+#     print(pad_top, pad_left, pad_bottom, pad_right)
+#     HSTR, WSTR = strides if isinstance(strides, (tuple, list)) else (strides, strides)
+#     OH = (IH + pad_top + pad_bottom - KH) // HSTR + 1
+#     OW = (IW + pad_left + pad_right - KW) // WSTR + 1
+#     print("output height and width", OH, OW)
+#     print("Stride", HSTR, WSTR)
+#     data_pad = pad(data, [0, pad_top, pad_left, 0], [0, pad_bottom, pad_right, 0])
 
-    if len(kernel.shape) == 4:
-        pre_packed = False
-        KH, KW, _, CO = get_const_tuple(kernel.shape)
-    else:
-        pre_packed = True
-        CO, _, KH, KW, VC = get_const_tuple(kernel.shape)
-        CO = CO * VC
+#     # ==================== define configuration space ====================
+#     n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
+#     ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
 
-    pad_top, pad_left, pad_bottom, pad_right = get_pad_tuple( padding, (KH, KW))
-    HSTR, WSTR = strides if isinstance(strides, (tuple, list)) else (strides, strides)
-    OH = (IH + pad_top + pad_bottom - KH) // HSTR + 1
-    OW = (IW + pad_left + pad_right - KW) // WSTR + 1
-    data_pad = pad(data, [0, pad_top, pad_left, 0], [0, pad_bottom, pad_right, 0])
+#     if num_tile == 2:     # for arm cpu
+#         co, vc = cfg.define_split('tile_co', co, num_outputs=2)
+#         oh, vh = cfg.define_split('tile_oh', oh, num_outputs=2)
+#         ow, vw = cfg.define_split('tile_ow', ow, num_outputs=2)
+#     elif num_tile == 3:   # for mali gpu
+#         co, _, vc = cfg.define_split('tile_co', co, num_outputs=3)
+#         oh, _, vh = cfg.define_split('tile_oh', oh, num_outputs=3)
+#         ow, _, vw = cfg.define_split('tile_ow', ow, num_outputs=3)
+#     else:
+#         raise RuntimeError("Invalid num_tile")
 
-    # ==================== define configuration space ====================
-    n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
-    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+#     cfg.define_reorder("reorder_0",
+#                        [n, oh, ow, co, ci, kh, kw, vh, vc, vw],
+#                        policy='candidate', candidate=[
+#                            [n, oh, ow, co, ci, kh, kw, vh, vc, vw],
+#                            [n, oh, ow, co, ci, kh, kw, vc, vh, vw]])
 
-    if num_tile == 2:     # for arm cpu
-        co, vc = cfg.define_split('tile_co', co, num_outputs=2)
-        oh, vh = cfg.define_split('tile_oh', oh, num_outputs=2)
-        ow, vw = cfg.define_split('tile_ow', ow, num_outputs=2)
-    elif num_tile == 3:   # for mali gpu
-        co, _, vc = cfg.define_split('tile_co', co, num_outputs=3)
-        oh, _, vh = cfg.define_split('tile_oh', oh, num_outputs=3)
-        ow, _, vw = cfg.define_split('tile_ow', ow, num_outputs=3)
-    else:
-        raise RuntimeError("Invalid num_tile")
+#     cfg.define_annotate("ann_reduce", [kh, kw], policy='try_unroll')
+#     cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
 
-    cfg.define_reorder("reorder_0",
-                       [n, oh, ow, co, ci, kh, kw, vh, vc, vw],
-                       policy='candidate', candidate=[
-                           [n, oh, ow, co, ci, kh, kw, vh, vc, vw],
-                           [n, oh, ow, co, ci, kh, kw, vc, vh, vw]])
+#     # fallback support
+#     if cfg.is_fallback:
+#         if num_tile == 2:     # arm cpu
+#             ref_log = autotvm.tophub.load_reference_log('arm_cpu', 'rk3399', 'conv2d', 'direct')
+#             cfg.fallback_with_reference_log(ref_log)
 
-    cfg.define_annotate("ann_reduce", [kh, kw], policy='try_unroll')
-    cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
+#     VC = cfg["tile_co"].size[-1]
+#     VH = cfg["tile_oh"].size[-1]
+#     VW = cfg["tile_ow"].size[-1]
+#     print(VH, VW, VC)
 
-    # fallback support
-    # if cfg.is_fallback:
-    #     if num_tile == 2:     # arm cpu
-    #         ref_log = autotvm.tophub.load_reference_log('arm_cpu', 'rk3399', 'conv2d', 'direct')
-    #         cfg.fallback_with_reference_log(ref_log)
+#     kvshape = (CO // VC, CI, KH, KW, VC)
+#     ovshape = (N, OH // VH, OW // VW, CO // VC, VH, VW, VC)
+#     print("ovshape", ovshape)
+#     oshape = (N, OH, OW, CO)
 
-    VC = cfg["tile_co"].size[-1]
-    VH = cfg["tile_oh"].size[-1]
-    VW = cfg["tile_ow"].size[-1]
+#     # undilate input data
+#     dvshape = (N, OH // VH, OW // VW, CI, VH*HSTR + KH-1, VW*WSTR + KW-1)
+#     data_vec = tvm.compute(dvshape, lambda n, h, w, ci, vh, vw:
+#                                data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][ci],
+#                                name='data_vec')
 
-    kvshape = (CO // VC, CI, KH, KW, VC)
-    ovshape = (N, OH // VH, OW // VW, CO // VC, VH, VW, VC)
-    oshape = (N, OH, OW, CO)
+#     # if pre_packed:
+#     #     kernel_vec = kernel
+#     # else:
+#     print("kvhsape", kvshape)
+#     kernel_vec = tvm.compute(kvshape, lambda co, ci, kh, kw, vc:
+#                                 kernel[kh][kw][ci][co*VC+vc],
+#                                 name='kernel_vec')
 
-    # undilate input data
-    dvshape = (N, OH // VH, OW // VW, CI, VH*HSTR + KH-1, VW*WSTR + KW-1)
-    data_vec = tvm.compute(dvshape, lambda n, h, w, ci, vh, vw:
-                               data_pad[n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw],
-                               name='data_vec')
+#     ci = tvm.reduce_axis((0, CI), name='ci')
+#     kh = tvm.reduce_axis((0, KH), name='kh')
+#     kw = tvm.reduce_axis((0, KW), name='kw')
+#     print(ci, kh, kw)
+#     print(ovshape)
+#     conv = tvm.compute(ovshape, lambda n, h, w, co, vh, vw, vc:
+#         # kernel_vec[co, 0, 0, 0, vc] + data_vec[n, h, w, 0, vh*HSTR, vw*WSTR],
+#         tvm.sum(
+#             data_vec[n, h, w, ci, vh*HSTR+kh, vw*WSTR+kw].astype(out_dtype) *
+#                 kernel_vec[co, ci, kh, kw, vc].astype(out_dtype),
+#                 # kernel[kh][kw][ci][co],
+#                 axis=[ci, kh, kw]), 
+#                 name='conv')
+                
+#     print("KERNEL VEC", kernel_vec, kernel_vec.shape)
 
-    kernel_vec = tvm.compute(kvshape, lambda co, ci, kh, kw, vc:
-                                kernel[co*VC+vc][ci][kh][kw],
-                                name='kernel_vec')
+#     output = tvm.compute(oshape, lambda n, h, w, co:
+#                          conv[n][h//VH][w//VW][CO//VC][h%VH][w%VW][co%VC],
+#                          name='output_unpack_nhwc', tag='spatial_conv2d_output_nhwc')
 
-    ci = tvm.reduce_axis((0, CI), name='ci')
-    kh = tvm.reduce_axis((0, KH), name='kh')
-    kw = tvm.reduce_axis((0, KW), name='kw')
+#     # output = tvm.compute(oshape, lambda n, h, w, co:
+#     #     tvm.sum(data[n, h*HSTR+kh, w*WSTR+kw, ci].astype(out_dtype) *
+#     #             kernel[kh, kw, ci, co].astype(out_dtype),
+#     #             axis=[ci, kh, kw]), name='conv')
 
-    conv = tvm.compute(ovshape, lambda n, h, w, co, vh, vw, vc: \
-        tvm.sum(data_vec[n, h, w, ci, vh*HSTR+kh, vw*WSTR+kw].astype(out_dtype) *
-                kernel_vec[co, ci, kh, kw, vc].astype(out_dtype),
-                axis=[ci, kh, kw]), name='conv')
-
-    output = tvm.compute(oshape, lambda n, h, w, co:
-                         conv[n][h//VH][w//VW][CO // VC][h%VH][w%VW][co%VC],
-                         name='output_unpack', tag='spatial_conv2d_output_nhwc')
-    return output
+#     return output
 
 def _schedule_spatial_pack(cfg, s, data_vec, kernel_vec,
                            conv, output, last):
@@ -392,14 +413,157 @@ def _schedule_spatial_pack(cfg, s, data_vec, kernel_vec,
     return s
 
 
+# def _schedule_spatial_pack_nhwc(cfg, s, data_vec, kernel_vec,
+#                            conv, output, last):
+#     print("SCHEDULE COVN2D NHWC")
+#     """schedule implementation"""
+#     return s
+#     n, oh, ow, co, vh, vw, vc = s[conv].op.axis
+#     ci, kh, kw = s[conv].op.reduce_axis
+
+#     # schedule conv
+#     cfg["reorder_0"].apply(s, conv, [n, oh, ow, co, ci, kh, kw, vh, vw, vc])
+#     cfg["ann_reduce"].apply(s, conv, [kh, kw],
+#                             axis_lens=[get_const_int(kh.dom.extent),
+#                                        get_const_int(kw.dom.extent)],
+#                             max_unroll=16,
+#                             cfg=cfg)
+#     cfg["ann_spatial"].apply(s, conv, [vh, vw, vc],
+#                              axis_lens=[cfg['tile_oh'].size[-1],
+#                                         cfg['tile_ow'].size[-1],
+#                                         cfg['tile_co'].size[-1]],
+#                              max_unroll=16,
+#                              cfg=cfg)
+
+#     # schedule fusion
+#     n, h, w, co = s[last].op.axis
+#     co, vc = cfg['tile_co'].apply(s, last, co)
+#     oh, vh = cfg['tile_oh'].apply(s, last, h)
+#     ow, vw = cfg['tile_ow'].apply(s, last, w)
+#     s[last].reorder(n, oh, ow, co, vh, vw, vc)
+#     if last != output:
+#         s[output].compute_inline()
+#         cfg["ann_spatial"].apply(s, last, [vh, vw, vc],
+#                                  axis_lens=[cfg['tile_oh'].size[-1],
+#                                             cfg['tile_ow'].size[-1],
+#                                             cfg['tile_co'].size[-1]],
+#                                  max_unroll=16,
+#                                  cfg=cfg)
+#     s[conv].compute_at(s[last], co)
+
+#     # mark parallel
+#     s[last].parallel(oh)
+
+#     _, h, _, _, _, _ = s[data_vec].op.axis
+#     s[data_vec].parallel(h)
+
+#     co, _, _, _, _ = s[kernel_vec].op.axis
+#     s[kernel_vec].parallel(co)
+#     return s
+
+def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, out_dtype):
+    out_dtype = out_dtype or data.dtype
+
+    N, IH, IW, CI  = get_const_tuple(data.shape)
+    if len(kernel.shape) == 4:
+        pre_packed = False
+        KH, KW, _, CO = get_const_tuple(kernel.shape)
+    else:  # kernel tensor is pre packed
+        pre_packed = True
+        CO, KH, KW, _, VC = get_const_tuple(kernel.shape)
+        CO = CO * VC
+
+    if isinstance(dilation, int):
+        dilation_h = dilation_w = dilation
+    else:
+        dilation_h, dilation_w = dilation
+
+    dilated_kernel_h = (KH - 1) * dilation_h + 1
+    dilated_kernel_w = (KW - 1) * dilation_w + 1
+
+    pad_top, pad_left, pad_down, pad_right = get_pad_tuple(padding,
+            (dilated_kernel_h, dilated_kernel_w))
+    HSTR, WSTR = strides if isinstance(strides, (tuple, list)) else (strides, strides)
+
+
+    OH = (IH + pad_top + pad_down - dilated_kernel_h) // HSTR + 1
+    OW = (IW + pad_left + pad_right - dilated_kernel_w) // WSTR + 1
+    data_pad = pad(data, [0, pad_top, pad_left, 0], [0, pad_down, pad_right, 0])
+
+    # ==================== define configuration space ====================
+    n, co, oh, ow = cfg.axis(N), cfg.axis(CO), cfg.axis(OH), cfg.axis(OW)
+    ci, kh, kw = cfg.reduce_axis(CI), cfg.reduce_axis(KH), cfg.reduce_axis(KW)
+
+    co, vc = cfg.define_split('tile_co', co, num_outputs=2)
+    oh, vh = cfg.define_split('tile_oh', oh, num_outputs=2)
+    ow, vw = cfg.define_split('tile_ow', ow, num_outputs=2)
+
+    cfg.define_reorder("reorder_0",
+                       [n, oh, ow, co, kh, kw, ci,vh, vw, vc],
+                       policy='candidate', candidate=[
+                           [n, oh, ow, co, kh, kw, ci, vh, vw, vc],
+                           [n, oh, ow, co, kh, kw, ci, vc, vh, vw]])
+
+    cfg.define_annotate("ann_reduce", [kh, kw], policy='try_unroll')
+    cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
+    # ====================================================================
+
+    VC = cfg["tile_co"].size[-1]
+    VH = cfg["tile_oh"].size[-1]
+    VW = cfg["tile_ow"].size[-1]
+
+    kvshape = (CO // VC, KH, KW, CI, VC)
+    ovshape = (N, OH // VH, OW // VW, CO // VC, VH, VW, VC)
+    oshape = (N, OH, OW, CO)
+
+    if dilation_h != 1 or dilation_w != 1:
+        # undilate input data
+        dvshape = (N, OH // VH, OW // VW, KH, KW, CI, VH, VW)
+        data_vec = tvm.compute(dvshape, lambda n, h, w, kh, kw, ci, vh, vw:
+                               data_pad[n][(h*VH+vh)*HSTR+kh*dilation_h]
+                               [(w*VW+vw)*WSTR+kw*dilation_w][ci],
+                               name='data_vec_undilated')
+    else:
+        dvshape = (N, OH // VH, OW // VW, KH + (VH-1)*HSTR, KW + (VW-1)*WSTR, CI)
+        data_vec = tvm.compute(dvshape, lambda n, h, w, vh, vw, ci:
+                               data_pad[n][h*VH*HSTR+vh][w*VW*WSTR+vw][ci],
+                               name='data_vec')
+    if pre_packed:
+        kernel_vec = kernel
+    else:
+        kernel_vec = tvm.compute(kvshape, lambda co, kh, kw, ci, vc:
+                                 kernel[kh][kw][ci][co*VC+vc],
+                                 name='kernel_vec')
+
+    ci = tvm.reduce_axis((0, CI), name='ci')
+    kh = tvm.reduce_axis((0, KH), name='kh')
+    kw = tvm.reduce_axis((0, KW), name='kw')
+
+    if dilation_h != 1 or dilation_w != 1:
+        conv = tvm.compute(ovshape, lambda n, h, w, co, vh, vw, vc: \
+            tvm.sum(data_vec[n, h, w, kh, kw, vh, vw, ci].astype(out_dtype) *
+                    kernel_vec[co, kh, kw, ci, vc].astype(out_dtype),
+                    axis=[ci, kh, kw]), name='conv')
+    else:
+        conv = tvm.compute(ovshape, lambda n, h, w, co, vh, vw, vc: \
+            tvm.sum(data_vec[n, h, w, vh*HSTR+kh, vw*WSTR+kw, ci].astype(out_dtype) *
+                    kernel_vec[co, kh, kw, ci, vc].astype(out_dtype),
+                    axis=[ci, kh, kw]), name='conv')
+
+    output = tvm.compute(oshape, lambda n, h, w, co:
+                         conv[n][h//VH][w//VW][co//VC][h%VH][w%VW][co%VC],
+                         name='output_unpack_nhwc', tag='spatial_conv2d_output_nhwc')
+    return output
+
 def _schedule_spatial_pack_nhwc(cfg, s, data_vec, kernel_vec,
                            conv, output, last):
+
     """schedule implementation"""
     n, oh, ow, co, vh, vw, vc = s[conv].op.axis
     ci, kh, kw = s[conv].op.reduce_axis
 
     # schedule conv
-    cfg["reorder_0"].apply(s, conv, [n, oh, ow, co, ci, kh, kw, vh, vw, vc])
+    cfg["reorder_0"].apply(s, conv, [n, oh, ow, co, kh, kw, vh, vw, ci, vc])
     cfg["ann_reduce"].apply(s, conv, [kh, kw],
                             axis_lens=[get_const_int(kh.dom.extent),
                                        get_const_int(kw.dom.extent)],
@@ -426,18 +590,19 @@ def _schedule_spatial_pack_nhwc(cfg, s, data_vec, kernel_vec,
                                             cfg['tile_co'].size[-1]],
                                  max_unroll=16,
                                  cfg=cfg)
-    s[conv].compute_at(s[last], co)
+    s[conv].compute_at(s[last], ow)
 
     # mark parallel
-    s[last].parallel(oh)
+    s[last].parallel(ow)
 
-    _, h, _, _, _, _ = s[data_vec].op.axis
+    if data_vec.op.name == 'data_vec_undilated':
+        _, h, _, _, _, _, _, _ = s[data_vec].op.axis
+    else:
+        _, h, _, _, _, _ = s[data_vec].op.axis
+
     s[data_vec].parallel(h)
 
-    co, _, _, _, _ = s[kernel_vec].op.axis
-    s[kernel_vec].parallel(co)
     return s
-
 
 @autotvm.register_topi_compute(conv2d, 'arm_cpu', ['winograd'])
 def conv2d_arm_cpu_winograd(cfg, data, kernel, strides, padding, dilation, layout, out_dtype):

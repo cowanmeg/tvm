@@ -27,6 +27,8 @@ from .. import op as _op
 from ... import nd as _nd
 from .common import ExprTable, new_var
 
+from riptide.anneal.anneal_funcs import *
+
 __all__ = ['from_keras']
 
 
@@ -163,6 +165,7 @@ def _convert_merge(inexpr, keras_layer, _):
 
 
 def _convert_dense(inexpr, keras_layer, etab):
+    # print("Normal dense layer")
     weightList = keras_layer.get_weights()
     weight = etab.new_const(weightList[0].transpose([1, 0]))
     params = {'weight':weight, 'units':weightList[0].shape[1]}
@@ -192,11 +195,11 @@ def _convert_dense(inexpr, keras_layer, etab):
 
 
 def _convert_convolution(inexpr, keras_layer, etab):
-    print("Convolution!")
     _check_data_format(keras_layer)
     is_deconv = type(keras_layer).__name__ == 'Conv2DTranspose'
     is_depthconv = type(keras_layer).__name__ == 'DepthwiseConv2D'
     weightList = keras_layer.get_weights()
+    # print(weightList[0][0])
     if etab.data_layout == 'NHWC':
         kernel_layout = 'HWIO'
     else:
@@ -270,12 +273,12 @@ def _convert_convolution(inexpr, keras_layer, etab):
         else:
             out = _op.nn.bias_add(out, bias, axis=-1)
     # defuse activation
-    if sys.version_info.major < 3:
-        act_type = keras_layer.activation.func_name
-    else:
-        act_type = keras_layer.activation.__name__
-    if act_type != 'linear':
-        out = _convert_activation(out, act_type, etab)
+    # if sys.version_info.major < 3:
+    #     act_type = keras_layer.activation.func_name
+    # else:
+    #     act_type = keras_layer.activation.__name__
+    # if act_type != 'linear':
+    #     out = _convert_activation(out, act_type, etab)
     return out
 
 
@@ -350,8 +353,8 @@ def _convert_pooling(inexpr, keras_layer, etab):
     if pool_type == 'GlobalMaxPooling2D':
         return _convert_flatten(_op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     if pool_type == 'GlobalAveragePooling2D':
-        return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
-        #return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
+        # return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
+        return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     pool_h, pool_w = keras_layer.pool_size
     stride_h, stride_w = keras_layer.strides
     params = {'pool_size': [pool_h, pool_w],
@@ -437,22 +440,36 @@ def _convert_enter_integer(inexpr, keras_layer, etab):
 
 
 def _convert_sawb_conv2d(inexpr, keras_layer, etab):
-    # TODO get multiplier from weights
-    scale = _expr.const(2.0)
-    wbits = etab.weight_bits
-    abits = keras_layer.bits
+    # print("SAWB", keras_layer.name)
+    name = 'resnet18/' + keras_layer.name + '/kernel'
+    if etab.sawb_scales is None:
+        sawb_scale = 2.2
+    else:
+        sawb_scale = etab.sawb_scales[name] # multiplier for the sawb
+    pact_alpha = keras_layer.parent.alpha.numpy()
+    # print(pact_alpha)
+    pact_scale = pact_alpha / (float(2**etab.activation_bits - 1)) # multiplier for the pact
+    # print("Sawb", pact_scale, sawb_scale, pact_scale * sawb_scale)
+    # print(name, scale)
 
     x = _convert_bitserial_convolution(inexpr, keras_layer, etab)
 
     x = _op.cast(x, dtype='float32')
-    x = x * scale
-    x = x * _op.cast(_expr.const(1.0 / (((2.0 ** abits)-1)*((2.0 ** wbits)-1))), 'float32')
+    x = x * _expr.const(pact_scale * sawb_scale)
     return x
 
 def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     # TODO: currently hardcoded to rpi data types.
+    # print("ACtiation bits", keras_layer.bits)
     _check_data_format(keras_layer)
-    weightList = keras_layer.get_weights()
+    # Note: Overriding this to use our checkpoint weights
+    # Using an eager checkpoint so have to modify
+    if etab.tf_params is None:
+        weightList = keras_layer.get_weights()
+    else:
+        name = 'resnet18/' + keras_layer.name + '/kernel'
+        weightList = [etab.tf_params[name]]
+
     kernel_h, kernel_w, in_channels, n_filters = weightList[0].shape
     # NHWC Actually needs HWIO, use OIHW for NCHW as below.
     if etab.data_layout == 'NCHW':
@@ -468,9 +485,13 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
     dilated_kernel_h = (kernel_h - 1) * dilation[0] + 1
     dilated_kernel_w = (kernel_w - 1) * dilation[1] + 1
     stride_h, stride_w = keras_layer.strides
-    # Quantize and bitpack weights.
-    weight = (weight > 0).astype('int16')
-    weight = _op.cast(etab.new_const(weight), 'int16')
+
+    # Quantize and bitpack weights. - Weights are passed in pre-quantized, but not yet bitpacked
+    if etab.tf_params is None:
+        weight = (weight > 0).astype('int16')
+        weight = _op.cast(etab.new_const(weight), 'int16')
+    else:
+        weight = etab.new_const(weight)
     if etab.data_layout == 'NCHW':
         q_weight = _op.nn.bitpack(weight, bits=etab.weight_bits, pack_axis=1, bit_axis=0, pack_type='uint8')
     else:
@@ -479,7 +500,7 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'kernel_size': [kernel_h, kernel_w],
               'strides': [stride_h, stride_w],
               'padding': [0, 0],
-              'activation_bits': int(keras_layer.bits),
+              'activation_bits': etab.activation_bits,
               'weight_bits': etab.weight_bits,
               'out_dtype': 'int16',
               'pack_dtype': 'uint8',
@@ -536,7 +557,7 @@ def _convert_bitserial_dense(inexpr, keras_layer, etab):
     params = {
         'weight': q_weight,
         'units': weightList[0].shape[1],
-        'data_bits': keras_layer.bits,
+        'data_bits': etab.activation_bits,
         'weight_bits': etab.weight_bits,
         'out_dtype': 'int16',
         'pack_dtype': 'uint8'
@@ -631,9 +652,17 @@ def _convert_scalu(inexpr, keras_layer, etab):
     return _op.cast(inexpr, 'float32') * scale
 
 def _convert_pact(inexpr, keras_layer, etab):
-    alpha = 1.0 # TODO: Need to read from weights!!
+    # Read in the alpha from passed in list
+    alpha = keras_layer.alpha.numpy()
+
+    a_bits = keras_layer.bits
+    scale = float((2**a_bits)-1) / alpha
+    # print("PACT alpha scale", alpha, scale)
+
+    # Clip, convert to integer, and cast
     x = _op.clip(inexpr, 0.0, alpha)
-    return _op.cast(inexpr, 'int8')
+    x = _op.round(x * _expr.const(scale)) #* (alpha / 2**a_bits-1)
+    return _op.cast(x, 'int8')
 
 def _convert_batchnorm(inexpr, keras_layer, etab):
     if etab.data_layout == 'NCHW' or len(keras_layer.input_shape) < 4:
@@ -925,7 +954,7 @@ def keras_op_to_relay(inexpr, keras_layer, outname, etab):
         etab.set_expr(name, out)
 
 
-def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
+def from_keras(model, shape=None, layout='NCHW', weight_bits=0, activation_bits=0, pact_alphas=None, sawb_scales=None, tf_params=None):
     """Convert keras model to relay Function.
 
     Parameters
@@ -947,7 +976,6 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
     params : dict of str to tvm.NDArray
         The parameter dict to be used by Relay.
     """
-    print("Entering from_keras")
     try:
         import tensorflow.keras as keras
     except ImportError:
@@ -978,7 +1006,10 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
     etab = ExprTable()
     etab.data_layout = layout
     etab.weight_bits = weight_bits
-    #previous_layer = None
+    etab.activation_bits = activation_bits
+    etab.pact_alphas = pact_alphas
+    etab.sawb_scales = sawb_scales
+    etab.tf_params = tf_params
     for keras_layer in model.layers:
         if isinstance(keras_layer, keras.layers.InputLayer):
             _convert_input_layer(keras_layer)
@@ -1028,9 +1059,11 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
                             op_name = o.name
                 # Add the op to our graph.
                 # Remember previous layer for some of the bitserial operators
-                #keras_layer.previous_layer = previous_layer
-                #previous_layer = keras_layer
-                print(op_name)
+                # keras_layer.previous_layer = previous_layer
+                # if previous_layer is not None:
+                #     print("Layer", keras_layer.name, "Parent is", previous_layer.name)
+                # previous_layer = keras_layer
+                # print(op_name)
                 keras_op_to_relay(inexpr, keras_layer, op_name, etab)
     # model._output_coordinates contains out_node(oc[0]), node_index(oc[1]) and tensor_index(oc[2])
     # Get all output nodes in etab using the name made from above values.
@@ -1043,5 +1076,6 @@ def from_keras(model, shape=None, layout='NCHW', weight_bits=0):
         outexpr.append(etab.get_expr(output.name + ':' + str(out_ctr)))
     outexpr = outexpr[0] if len(outexpr) == 1 else _expr.Tuple(outexpr)
     func = _expr.Function(ir_pass.free_vars(outexpr), outexpr)
-    params = {k:_nd.array(np.array(v, dtype=np.float32)) for k, v in etab.params.items()}
+    # have to change to v.dtype for 
+    params = {k:_nd.array(np.array(v, dtype=v.dtype)) for k, v in etab.params.items()}
     return _module.Module.from_expr(func), params

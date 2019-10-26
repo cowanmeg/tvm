@@ -1289,7 +1289,6 @@ def bitserial_conv2d(data,
     result : tvm.relay.Expr
         The computed result.
     """
-    print(weight_bits, activation_bits)
     return _make.bitserial_conv2d(data, weight, strides, padding, channels,
                                   kernel_size, activation_bits, weight_bits,
                                   data_layout, pack_dtype, out_dtype, unipolar)

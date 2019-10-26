@@ -44,6 +44,7 @@ bool Conv2DRel(const Array<Type>& types,
   const auto* weight = types[1].as<TensorTypeNode>();
   if (data == nullptr) return false;
   static const Layout kNCHW("NCHW");
+  static const Layout kNHWC("NHWC");
   static const Layout kOIHW("OIHW");
 
   const Conv2DAttrs* param = attrs.as<Conv2DAttrs>();
@@ -111,9 +112,19 @@ bool Conv2DRel(const Array<Type>& types,
   }
   // dilation
   Array<IndexExpr> oshape({dshape_nchw[0], channels, 0, 0});
+  
+   auto height_pad = param->padding[0];
+  auto width_pad = param->padding[1];
+  if (in_layout.Equals(kNHWC)) {
+    height_pad += param->padding[2];
+    width_pad += param->padding[3];
+  } else {
+    height_pad += param->padding[0];
+    width_pad += param->padding[1];
+  }
 
-  oshape.Set(2, (dshape_nchw[2] + param->padding[0] * 2 - dilated_ksize_y) / param->strides[0] + 1);
-  oshape.Set(3, (dshape_nchw[3] + param->padding[1] * 2 - dilated_ksize_x) / param->strides[1] + 1);
+  oshape.Set(2, (dshape_nchw[2] + height_pad - dilated_ksize_y) / param->strides[0] + 1);
+  oshape.Set(3, (dshape_nchw[3] + width_pad - dilated_ksize_x) / param->strides[1] + 1);
   DataType out_dtype = param->out_dtype;
   if (out_dtype.bits() == 0) {
     out_dtype = data->dtype;

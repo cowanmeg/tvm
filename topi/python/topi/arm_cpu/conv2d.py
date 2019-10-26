@@ -481,13 +481,17 @@ def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, out_d
     dilated_kernel_h = (KH - 1) * dilation_h + 1
     dilated_kernel_w = (KW - 1) * dilation_w + 1
 
-    pad_top, pad_left, pad_down, pad_right = get_pad_tuple(padding,
-            (dilated_kernel_h, dilated_kernel_w))
+    if len(padding) == 4:
+        pad_top, pad_left, pad_down, pad_right = padding
+    else:
+        pad_top, pad_left, pad_down, pad_right = get_pad_tuple(padding,
+                (dilated_kernel_h, dilated_kernel_w))
     HSTR, WSTR = strides if isinstance(strides, (tuple, list)) else (strides, strides)
 
 
     OH = (IH + pad_top + pad_down - dilated_kernel_h) // HSTR + 1
     OW = (IW + pad_left + pad_right - dilated_kernel_w) // WSTR + 1
+    print(OH, OW)
     data_pad = pad(data, [0, pad_top, pad_left, 0], [0, pad_down, pad_right, 0])
 
     # ==================== define configuration space ====================
@@ -499,7 +503,7 @@ def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, out_d
     ow, vw = cfg.define_split('tile_ow', ow, num_outputs=2)
 
     cfg.define_reorder("reorder_0",
-                       [n, oh, ow, co, kh, kw, ci,vh, vw, vc],
+                       [n, oh, ow, co, kh, kw, ci, vh, vw, vc],
                        policy='candidate', candidate=[
                            [n, oh, ow, co, kh, kw, ci, vh, vw, vc],
                            [n, oh, ow, co, kh, kw, ci, vc, vh, vw]])
@@ -593,14 +597,15 @@ def _schedule_spatial_pack_nhwc(cfg, s, data_vec, kernel_vec,
     s[conv].compute_at(s[last], ow)
 
     # mark parallel
-    s[last].parallel(ow)
+    s[last].parallel(oh)
 
     if data_vec.op.name == 'data_vec_undilated':
         _, h, _, _, _, _, _, _ = s[data_vec].op.axis
     else:
-        _, h, _, _, _, _ = s[data_vec].op.axis
+        _, h, _, _, _, x = s[data_vec].op.axis
 
     s[data_vec].parallel(h)
+    s[data_vec].vectorize(x)
 
     return s
 

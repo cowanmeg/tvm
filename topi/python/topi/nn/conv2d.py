@@ -326,8 +326,6 @@ def conv2d_nhwc(Input, Filter, stride, padding, dilation, out_dtype='float32'):
     out_channel = num_filter
     out_height = simplify((in_height - dilated_kernel_h + pad_top + pad_down) // stride_h + 1)
     out_width = simplify((in_width - dilated_kernel_w + pad_left + pad_right) // stride_w + 1)
-    print(padding)
-    print(out_height, out_width)
     pad_before = [0, pad_top, pad_left, 0]
     pad_after = [0, pad_down, pad_right, 0]
     PaddedInput = pad(Input, pad_before, pad_after, name="PaddedInput")

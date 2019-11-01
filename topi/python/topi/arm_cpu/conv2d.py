@@ -491,7 +491,6 @@ def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, out_d
 
     OH = (IH + pad_top + pad_down - dilated_kernel_h) // HSTR + 1
     OW = (IW + pad_left + pad_right - dilated_kernel_w) // WSTR + 1
-    print(OH, OW)
     data_pad = pad(data, [0, pad_top, pad_left, 0], [0, pad_down, pad_right, 0])
 
     # ==================== define configuration space ====================
@@ -506,7 +505,7 @@ def _decl_spatial_pack_nhwc(cfg, data, kernel, strides, padding, dilation, out_d
                        [n, oh, ow, co, kh, kw, ci, vh, vw, vc],
                        policy='candidate', candidate=[
                            [n, oh, ow, co, kh, kw, ci, vh, vw, vc],
-                           [n, oh, ow, co, kh, kw, ci, vc, vh, vw]])
+                           [n, oh, ow, co, kh, kw, ci, vh, vc, vw]])
 
     cfg.define_annotate("ann_reduce", [kh, kw], policy='try_unroll')
     cfg.define_annotate("ann_spatial", [vh, vw, vc], policy='try_unroll_vec')
@@ -600,12 +599,20 @@ def _schedule_spatial_pack_nhwc(cfg, s, data_vec, kernel_vec,
     s[last].parallel(oh)
 
     if data_vec.op.name == 'data_vec_undilated':
-        _, h, _, _, _, _, _, _ = s[data_vec].op.axis
+        _, h, _, _, _, _, _, x = s[data_vec].op.axis
     else:
         _, h, _, _, _, x = s[data_vec].op.axis
-
     s[data_vec].parallel(h)
     s[data_vec].vectorize(x)
+
+    if kernel_vec.op.name == 'kernel_vec':
+        co, _, _, _, _ = s[kernel_vec].op.axis
+        if autotvm.GLOBAL_SCOPE.in_tuning:
+            # kernel packing will be pre-computed during compilation, so we skip
+            # this part to make tuning records correct
+            s[kernel_vec].pragma(co, 'debug_skip_region')
+        else:
+            s[kernel_vec].parallel(co)
 
     return s
 
@@ -1022,6 +1029,30 @@ def _alter_conv2d_layout_arm(attrs, inputs, tinfos, F):
     out_dtype = attrs["out_dtype"]
     if out_dtype in ("same", ""):
         out_dtype = tinfos[0].dtype
+
+
+    if layout == "NHWC":
+        data, kernel = tinfos[0:2]
+        N, H, W, CI = get_const_tuple(data.shape)
+        KH, KW , _, CO = get_const_tuple(kernel.shape)
+
+        workload = autotvm.task.args_to_workload(
+            [data, kernel, strides, padding, dilation, layout, out_dtype], conv2d)
+        target = tvm.target.current_target()
+        dispatch_ctx = autotvm.DispatchContext.current
+        cfg = dispatch_ctx.query(target, workload)
+
+        if cfg.template_key == 'direct':  # pack weight tensor
+            VC = cfg['tile_co'].size[-1]
+            new_attrs['kernel_layout'] = 'OHWI%do' % VC
+
+            # Store the same config for the altered operator (workload)
+            new_data = data
+            new_kernel = tvm.placeholder((CO // VC, KH, KW, CI, VC), dtype=kernel.dtype)
+            new_workload = autotvm.task.args_to_workload(
+                [new_data, new_kernel, strides, padding, dilation, 'NHWC', out_dtype], conv2d)
+            dispatch_ctx.update(target, new_workload, cfg)
+            return F.nn.conv2d(*copy_inputs, **new_attrs)
 
     if layout != 'NCHW':
         return None

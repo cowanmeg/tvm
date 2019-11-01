@@ -249,16 +249,17 @@ def _convert_convolution(inexpr, keras_layer, etab):
         in_w = keras_layer.input_shape[2]
         pad_t, pad_b = _get_pad_pair(in_h, dilated_kernel_h, stride_h)
         pad_l, pad_r = _get_pad_pair(in_w, dilated_kernel_w, stride_w)
-        params['padding'] = (pad_t, pad_l, pad_b, pad_r)
-        # if pad_t == pad_b and pad_l == pad_r:
-        #     params['padding'] = (pad_t, pad_l)
-        # else:
-        #     if etab.data_layout == 'NCHW':
-        #         inexpr = _op.nn.pad(data=inexpr, pad_width=(
-        #             (0, 0), (0, 0), (pad_t, pad_b), (pad_l, pad_r)))
-        #     else:
-        #         inexpr = _op.nn.pad(data=inexpr, pad_width=(
-        #             (0, 0), (pad_t, pad_b), (pad_l, pad_r), (0, 0)))
+        if etab.data_layout == 'NHWC':
+            params['padding'] = (pad_t, pad_l, pad_b, pad_r)
+        elif pad_t == pad_b and pad_l == pad_r:
+            params['padding'] = (pad_t, pad_l)
+        else:
+            if etab.data_layout == 'NCHW':
+                inexpr = _op.nn.pad(data=inexpr, pad_width=(
+                    (0, 0), (0, 0), (pad_t, pad_b), (pad_l, pad_r)))
+            else:
+                inexpr = _op.nn.pad(data=inexpr, pad_width=(
+                    (0, 0), (pad_t, pad_b), (pad_l, pad_r), (0, 0)))
     else:
         msg = 'Padding with {} is not supported for operator Convolution ' \
               'in frontend Keras.'
@@ -354,8 +355,8 @@ def _convert_pooling(inexpr, keras_layer, etab):
     if pool_type == 'GlobalMaxPooling2D':
         return _convert_flatten(_op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     if pool_type == 'GlobalAveragePooling2D':
-        # return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
-        return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
+        return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
+        # return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     pool_h, pool_w = keras_layer.pool_size
     stride_h, stride_w = keras_layer.strides
     params = {'pool_size': [pool_h, pool_w],
@@ -505,7 +506,7 @@ def _convert_bitserial_convolution(inexpr, keras_layer, etab):
               'weight_bits': etab.weight_bits,
               'out_dtype': 'int16',
               'pack_dtype': 'uint8',
-              'kernel_layout': kernel_layout,
+              'kernel_layout': 'HWBIO', #kernel_layout,
               'data_layout': etab.data_layout}
     params['channels'] = n_filters
     if keras_layer.padding == 'valid':

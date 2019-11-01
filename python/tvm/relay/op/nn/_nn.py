@@ -111,6 +111,7 @@ def compute_conv2d(attrs, inputs, out_type, target):
     out_dtype = (inputs[0].dtype if out_dtype in ("same", "")
                  else out_dtype)
 
+
     assert layout in ["NCHW", "NHWC", "NCHW4c"]
     (dilation_h, dilation_w) = dilation
     if dilation_h < 1 or dilation_w < 1:
@@ -536,6 +537,7 @@ def schedule_bitpack(attrs, outs, target):
 reg.register_pattern("nn.bitpack", OpPattern.INJECTIVE)
 
 
+
 @reg.register_compute("nn.bitserial_conv2d")
 def compute_bitserial_conv2d(attrs, inputs, out_dtype, target):
     """Compute definition for bitserial conv2d."""
@@ -577,6 +579,11 @@ def schedule_bitserial_conv2d(attrs, outs, target):
     else:
         raise ValueError("Data layout not supported.")
 
+@reg.register_alter_op_layout("nn.bitserial_conv2d")
+def alter_op_layout_bitserial_conv2d(attrs, inputs, tinfos):
+    """Alternate the layout of conv2d"""
+    from ... import op
+    return topi.nn.bitserial_conv2d_alter_layout(attrs, inputs, tinfos, op)
 
 reg.register_pattern("nn.bitserial_conv2d", OpPattern.OUT_ELEMWISE_FUSABLE)
 

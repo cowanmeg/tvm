@@ -21,7 +21,7 @@ import tvm
 from tvm import autotvm
 from .. import tag
 from ..nn.pad import pad
-from ..nn.bitserial_conv2d import bitserial_conv2d_nhwc
+from ..nn.bitserial_conv2d import bitserial_conv2d_nhwc, bitserial_conv2d_alter_layout
 from ..nn.bitserial_util import bitpack, binary_op_multiplier
 from ..nn.util import get_pad_tuple
 from ..util import traverse_inline, get_const_int, get_const_tuple
@@ -51,14 +51,19 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
         assert out_dtype == 'int16', "only support output type of int16"
     else:
         assert out_dtype == 'uint16', "only support output type of uint16"
-
     N, H, W, CI = get_const_tuple(data.shape)
+    alter_kernel = True
     if len(kernel.shape) == 4:
         KH, KW, _, CO = get_const_tuple(kernel.shape)
         CI_packed = CI // 8
-    else:
+    elif len(kernel.shape) == 5:
         KH, KW, KB, CI_packed, CO = get_const_tuple(kernel.shape)
-
+    else:
+        OCO, KH, KW, KB, VC, CI_packed = get_const_tuple(kernel.shape)
+        CO = OCO * VC
+        alter_kernel = False
+        kernel_vec = kernel
+ 
     if isinstance(padding, int) or (isinstance(padding, (tuple, list)) and len(padding) == 2):
         DPAD, RPAD, TPAD, LPAD = get_pad_tuple(padding, kernel)
     else:
@@ -112,14 +117,17 @@ def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weigh
     VW = cfg["tile_ow"].size[-1]
     VCI = cfg["tile_ci"].size[-1]
 
+    # print("BS CONV", kernel.shape, VC, alter_kernel)
+
     data_q = bitpack(data, activation_bits, pack_axis=3, bit_axis=3, pack_type='uint8')
 
-    kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, VCI, len(kernel.shape) == 4)
+    if alter_kernel:
+        kernel_vec = _kernel_vec_spatial_pack_nhwc(kernel, weight_bits, VC, VCI, len(kernel.shape) == 4)
+        
     #if kernel_vec.shape[-1] % 8 != 0 and CI_PAD != 0:
     #    kernel_vec = pad(kernel_vec, [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, CI_PAD])
 
     N, H, W, IB, CI = data_q.shape
-    OCO, KH, KW, KB, VC, CI = kernel_vec.shape
     dvshape = (N, OH // VH, OW // VW, VH*HSTR + KH-1, VW*WSTR + KW-1, IB, CI)
     ovshape = (1, OH // VH, OW // VW, CO // VC, VH, VW, VC)
 
@@ -214,7 +222,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
                 half = ""
             if unipolar:
                 name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
-                #print("Calling", name)
+                # print("Calling", name)
             else:
                 name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
                 # print("Calling ", name)
@@ -372,10 +380,14 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec, kernel_vec
     # print("Parallel and vectorize", fused, x)
 
     #### Schedule kernel packing
-    if autotvm.GLOBAL_SCOPE.in_tuning:
-        # Will be prepacked during inference - ignore during tuning
+    if kernel_vec.op.name == 'kernel_vec':
         co, _, _, _, _, _ = s[kernel_vec].op.axis
-        s[kernel_vec].parallel(co)
+        if autotvm.GLOBAL_SCOPE.in_tuning:
+            # kernel transformation will be pre-computed during compilation, so we skip
+            # this part to make tuning records correct
+            s[kernel_vec].pragma(co, 'debug_skip_region')
+        else:
+            s[kernel_vec].parallel(co)
 
     ##### Schedule Convolution
     n, oh, ow, co, vh, vw, vc = s[conv_out].op.axis
@@ -386,7 +398,7 @@ def _schedule_spatial_conv2d_nhwc(cfg, s, data_q, data_pad, data_vec, kernel_vec
 
     # s[conv_out].unroll(kh)
     # s[conv_out].unroll(kw)
-    s[conv_out].unroll(ci_o)
+    # s[conv_out].unroll(ci_o)
 
     # Use microkernel
     kfactor = cfg['tile_ci'].size[1]
@@ -427,7 +439,7 @@ def schedule_bitserial_conv2d_nhwc(cfg, outs):
             output = op.output(0)
             conv_out = op.input_tensors[0]
             kernel_vec = conv_out.op.input_tensors[0]
-            kernel_q = kernel_vec.op.input_tensors[0]
+            # kernel_q = kernel_vec.op.input_tensors[0]
             data_vec = conv_out.op.input_tensors[1]
             data_q = data_vec.op.input_tensors[0]
             data = data_q.op.input_tensors[0]
@@ -442,3 +454,80 @@ def schedule_bitserial_conv2d_nhwc(cfg, outs):
 
     traverse_inline(s, outs[0].op, _callback)
     return s
+
+##### REGISTER ALTER OP LAYOUT #####
+@bitserial_conv2d_alter_layout.register(["arm_cpu"])
+def _alter_bitserial_conv2d_layout_arm(attrs, inputs, tinfos, F):
+    """Alter op layout for pre-computing kernel transformation
+
+    Parameters
+    ----------
+    attrs : nnvm.top.AttrDict or tvm.attrs.Attrs
+        Attributes of current convolution
+    inputs : nnvm.symbol or tvm.relay.Expr
+        Grouped input symbols
+    tinfos : list
+        Input shape and dtype
+    F: symbol
+        The context, can be either nnvm.sym or relay.op
+
+    Note
+    ----
+    Unlike other TOPI functions, this function operates on both graph level and operator level,
+    so we have to pass 'F' to make it support our two versions of graph IR, NNVM and Relay.
+    """
+    copy_inputs = [s for s in inputs]
+
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+
+    # if F.__name__ == 'tvm.relay.op':
+    #     # Derive channels for frontends (e.g ONNX) that miss "channel" field.
+    #     print(new_attrs["channels"])
+    #     new_attrs["channels"] = inputs[1].checked_type.shape[attrs['kernel_layout'].index('O')]
+
+    strides = attrs.get_int_tuple("strides")
+    padding = attrs.get_int_tuple("padding")
+    activation_bits = attrs.get_int("activation_bits")
+    weight_bits = attrs.get_int("weight_bits")
+    data_layout_key = "data_layout" if "data_layout" in new_attrs else "layout"
+    layout = attrs[data_layout_key]
+    out_dtype = attrs["out_dtype"]
+    pack_dtype = attrs["pack_dtype"]
+    unipolar = attrs["unipolar"]
+    if out_dtype in ("same", ""):
+        out_dtype = tinfos[0].dtype
+
+    if layout == "NHWC":
+        data, kernel = tinfos[0:2]
+        N, H, W, CI = get_const_tuple(data.shape)
+        if len(kernel.shape) == 4:
+            KH, KW, _, CO = get_const_tuple(kernel.shape)
+            CI_Packed = CI // 8
+        else:
+            KH, KW , _, CI_Packed, CO = get_const_tuple(kernel.shape)
+
+        workload = autotvm.task.args_to_workload(
+            [data, kernel, strides, padding, activation_bits, weight_bits,
+            pack_dtype, out_dtype, unipolar], bitserial_conv2d_nhwc)
+
+        target = tvm.target.current_target()
+        dispatch_ctx = autotvm.DispatchContext.current
+        cfg = dispatch_ctx.query(target, workload)
+        
+        if cfg.template_key == 'direct':  # pack weight tensor
+            VC = cfg['tile_co'].size[-1]
+            new_attrs['kernel_layout'] = 'OHWB%doI' % VC
+
+            # Store the same config for the altered operator (workload)
+            new_data = data
+            new_kernel = tvm.placeholder((CO//VC, KH, KW, weight_bits, VC, CI_Packed), dtype=pack_dtype)
+            # print("Alter bitserial conv nhwc. New kernel", new_kernel.shape, kernel.shape)
+            new_workload = autotvm.task.args_to_workload(
+                [new_data, new_kernel, strides, padding, activation_bits, weight_bits,
+            pack_dtype, out_dtype, unipolar], bitserial_conv2d_nhwc)
+            dispatch_ctx.update(target, new_workload, cfg)
+
+            return F.nn.bitserial_conv2d(*copy_inputs, **new_attrs)
+    
+    else:
+        return None

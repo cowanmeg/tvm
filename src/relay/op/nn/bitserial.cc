@@ -147,6 +147,7 @@ Expr MakeBinaryConv2D(Expr data,
                       int activation_bits,
                       int weight_bits,
                       std::string data_layout,
+                      std::string kernel_layout,
                       DataType pack_dtype,
                       DataType out_dtype,
                       bool unipolar) {
@@ -158,6 +159,7 @@ Expr MakeBinaryConv2D(Expr data,
   attrs->activation_bits = activation_bits;
   attrs->weight_bits = weight_bits;
   attrs->data_layout = std::move(data_layout);
+  attrs->kernel_layout = std::move(kernel_layout);
   attrs->pack_dtype = std::move(pack_dtype);
   attrs->out_dtype = std::move(out_dtype);
   attrs->unipolar = unipolar;

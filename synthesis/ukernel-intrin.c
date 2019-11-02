@@ -210,9 +210,13 @@ extern "C" int update_unipolar_a2b1_half(int8_t* src_a, int8_t* src_b, int16_t* 
     int8x8_t a1[8];
     int8x8_t b0 = vld1_s8(src_b);
     int16x8_t output = vld1q_s16(dst);
-    for(int i = 0; i < 8; i++) {
-        a0[i] = vld1_s8(src_a + i*a_str0);
-        a1[i] = vld1_s8(src_a + a_str1 + 8*a_str0);
+    for(int i = 0; i < 4; i++) {
+        int8x16_t aa0 = vld1q_s8(src_a + i*2*a_str0);
+        int8x16_t aa1 = vld1q_s8(src_a + a_str1 + i*2*a_str0);
+        a0[2*i] = vget_low_s8(aa0);
+        a0[2*i + 1] = vget_high_s8(aa0);
+        a1[2*i] = vget_low_s8(aa1);
+        a1[2*i + 1] = vget_high_s8(aa1);
     }
     
     int8x8_t x003o = vand_s8(a0[0], b0);
@@ -510,10 +514,16 @@ extern "C" int update_unipolar_a3b1_half(int8_t* src_a, int8_t* src_b, int16_t* 
     int8x8_t a2[8];
     int8x8_t b0 = vld1_s8(src_b);
     int16x8_t output = vld1q_s16(dst);
-    for(int i = 0; i < 8; i++) {
-        a0[i] = vld1_s8(src_a + i*a_str0);
-        a1[i] = vld1_s8(src_a + a_str1 + i*a_str0);
-        a2[i] = vld1_s8(src_a + 2*a_str1 + i*a_str0);
+    for(int i = 0; i < 4; i++) {
+        int8x16_t aa0 = vld1q_s8(src_a + i*2*a_str0);
+        int8x16_t aa1 = vld1q_s8(src_a + a_str1 + i*2*a_str0);
+        int8x16_t aa2 = vld1q_s8(src_a + 2*a_str1 + i*2*a_str0);
+        a0[2*i] = vget_low_s8(aa0);
+        a0[2*i + 1] = vget_high_s8(aa0);
+        a1[2*i] = vget_low_s8(aa1);
+        a1[2*i + 1] = vget_high_s8(aa1);
+        a2[2*i] = vget_low_s8(aa2);
+        a2[2*i + 1] = vget_high_s8(aa2);
     }
 
     int8x8_t x004_ = vand_s8(a0[0], b0);
@@ -918,148 +928,498 @@ extern "C" int update_unipolar_a2b2_half(int8_t* src_a, int8_t* src_b, int16_t* 
     int16x4_t x0__o = vpadd_s16(vget_low_s16(x2__), vget_high_s16(x2__));
     int16x8_t out = vaddq_s16(vcombine_s16(x0___, x0__o), output);
 
-    // manual
+    // store
     vst1q_s16(dst, out);
     return 0;
 }
 
-extern "C" int update_bipolar_a1b1_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
+extern "C" int update_unipolar_a4b1_half(int8_t* src_a, int8_t* src_b, int16_t* dst, 
     int a_str1, int a_str0, int b_str0){
-    // todo - data loading
-    uint8x8_t a[8];
-    for(int i = 0; i < 8; i++)
-        a[i] = vld1_u8(src_a + i*a_str0);
-    uint8x8_t b = vld1_u8(src_b);
-    uint16x8_t output = vld1q_u16(dst);
 
-    // from racket phase 1: 
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(a[i], b);
-        a[i] = vcnt_u8(temp);
+    int8x8_t a0[8];
+    int8x8_t a1[8];
+    int8x8_t a2[8];
+    int8x8_t a3[8];
+    for(int i = 0; i < 4; i++) {
+        int8x16_t aa0 = vld1q_s8(src_a + i*2*a_str0);
+        int8x16_t aa1 = vld1q_s8(src_a + a_str1 + i*2*a_str0);
+        int8x16_t aa2 = vld1q_s8(src_a + 2*a_str1 + i*2*a_str0);
+        int8x16_t aa3 = vld1q_s8(src_a + 3*a_str1 + i*2*a_str0);
+        a0[2*i] = vget_low_s8(aa0);
+        a0[2*i + 1] = vget_high_s8(aa0);
+        a1[2*i] = vget_low_s8(aa1);
+        a1[2*i + 1] = vget_high_s8(aa1);
+        a2[2*i] = vget_low_s8(aa2);
+        a2[2*i + 1] = vget_high_s8(aa2);
+        a3[2*i] = vget_low_s8(aa3);
+        a3[2*i + 1] = vget_high_s8(aa3);
     }
+    uint8x8_t b0 = vld1_s8(src_b);
+    int16x8_t output = vld1q_s16(dst);
 
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(a[0], a[1]);
-    uint8x8_t d1_ = vpadd_u8(a[2], a[3]);
-    uint8x8_t d2_ = vpadd_u8(a[4], a[5]);
-    uint8x8_t d3_ = vpadd_u8(a[6], a[7]);
-    
-    uint8x8_t d0__ = vpadd_u8(d0_, d1_);
-    uint8x8_t d1__ = vpadd_u8(d2_, d3_);
-    
-    // TODO: print combine
-    uint16x8_t d0____ = vpadalq_u8(output, vcombine_u8(d0__, d1__));
+    int8x8_t x005o = vand_s8(a0[0], b0);
+    int8x8_t x006_ = vbic_s8(b0, a0[0]);
+    int8x8_t x007o = vcnt_s8(x005o);
+    int8x8_t x008_ = vcnt_s8(x006_);
+    int8x8_t x0010_ = vsub_s8(x007o, x008_);
+    int8x8_t x005oo = vand_s8(a1[0], b0);
+    int8x8_t x006__ = vbic_s8(b0, a1[0]);
+    int8x8_t x007oo = vcnt_s8(x005oo);
+    int8x8_t x008__ = vcnt_s8(x006__);
+    int8x8_t x009o = vsub_s8(x007oo, x008__);
+    int8x8_t x0011o = vshl_n_s8(x009o, 1);
+    int8x8_t x005ooo = vand_s8(a2[0], b0);
+    int8x8_t x006___ = vbic_s8(b0, a2[0]);
+    int8x8_t x007ooo = vcnt_s8(x005ooo);
+    int8x8_t x008___ = vcnt_s8(x006___);
+    int8x8_t x009oo = vsub_s8(x007ooo, x008___);
+    int8x8_t x0012_ = vshl_n_s8(x009oo, 2);
+    int8x8_t x005oooo = vbic_s8(b0, a3[0]);
+    int8x8_t x006____ = vand_s8(a3[0], b0);
+    int8x8_t x007oooo = vcnt_s8(x006____);
+    int8x8_t x008____ = vcnt_s8(x005oooo);
+    int8x8_t x009ooo = vsub_s8(x007oooo, x008____);
+    int8x8_t x0013o = vshl_n_s8(x009ooo, 3);
+    int8x8_t x0010__ = vadd_s8(x0010_, x0011o);
+    int8x8_t x0010___ = vadd_s8(x0010__, x0012_);
+    int8x8_t y0 = vadd_s8(x0010___, x0013o);
+    int8x8_t x105o = vand_s8(a0[1], b0);
+    int8x8_t x106_ = vbic_s8(b0, a0[1]);
+    int8x8_t x107o = vcnt_s8(x105o);
+    int8x8_t x108_ = vcnt_s8(x106_);
+    int8x8_t x1010_ = vsub_s8(x107o, x108_);
+    int8x8_t x105oo = vand_s8(a1[1], b0);
+    int8x8_t x106__ = vbic_s8(b0, a1[1]);
+    int8x8_t x107oo = vcnt_s8(x105oo);
+    int8x8_t x108__ = vcnt_s8(x106__);
+    int8x8_t x109o = vsub_s8(x107oo, x108__);
+    int8x8_t x1011o = vshl_n_s8(x109o, 1);
+    int8x8_t x105ooo = vand_s8(a2[1], b0);
+    int8x8_t x106___ = vbic_s8(b0, a2[1]);
+    int8x8_t x107ooo = vcnt_s8(x105ooo);
+    int8x8_t x108___ = vcnt_s8(x106___);
+    int8x8_t x109oo = vsub_s8(x107ooo, x108___);
+    int8x8_t x1012_ = vshl_n_s8(x109oo, 2);
+    int8x8_t x105oooo = vbic_s8(b0, a3[1]);
+    int8x8_t x106____ = vand_s8(a3[1], b0);
+    int8x8_t x107oooo = vcnt_s8(x106____);
+    int8x8_t x108____ = vcnt_s8(x105oooo);
+    int8x8_t x109ooo = vsub_s8(x107oooo, x108____);
+    int8x8_t x1013o = vshl_n_s8(x109ooo, 3);
+    int8x8_t x1010__ = vadd_s8(x1010_, x1011o);
+    int8x8_t x1010___ = vadd_s8(x1010__, x1012_);
+    int8x8_t y1 = vadd_s8(x1010___, x1013o);
+    int8x8_t x205o = vand_s8(a0[2], b0);
+    int8x8_t x206_ = vbic_s8(b0, a0[2]);
+    int8x8_t x207o = vcnt_s8(x205o);
+    int8x8_t x208_ = vcnt_s8(x206_);
+    int8x8_t x2010_ = vsub_s8(x207o, x208_);
+    int8x8_t x205oo = vand_s8(a1[2], b0);
+    int8x8_t x206__ = vbic_s8(b0, a1[2]);
+    int8x8_t x207oo = vcnt_s8(x205oo);
+    int8x8_t x208__ = vcnt_s8(x206__);
+    int8x8_t x209o = vsub_s8(x207oo, x208__);
+    int8x8_t x2011o = vshl_n_s8(x209o, 1);
+    int8x8_t x205ooo = vand_s8(a2[2], b0);
+    int8x8_t x206___ = vbic_s8(b0, a2[2]);
+    int8x8_t x207ooo = vcnt_s8(x205ooo);
+    int8x8_t x208___ = vcnt_s8(x206___);
+    int8x8_t x209oo = vsub_s8(x207ooo, x208___);
+    int8x8_t x2012_ = vshl_n_s8(x209oo, 2);
+    int8x8_t x205oooo = vbic_s8(b0, a3[2]);
+    int8x8_t x206____ = vand_s8(a3[2], b0);
+    int8x8_t x207oooo = vcnt_s8(x206____);
+    int8x8_t x208____ = vcnt_s8(x205oooo);
+    int8x8_t x209ooo = vsub_s8(x207oooo, x208____);
+    int8x8_t x2013o = vshl_n_s8(x209ooo, 3);
+    int8x8_t x2010__ = vadd_s8(x2010_, x2011o);
+    int8x8_t x2010___ = vadd_s8(x2010__, x2012_);
+    int8x8_t y2 = vadd_s8(x2010___, x2013o);
+    int8x8_t x305o = vand_s8(a0[3], b0);
+    int8x8_t x306_ = vbic_s8(b0, a0[3]);
+    int8x8_t x307o = vcnt_s8(x305o);
+    int8x8_t x308_ = vcnt_s8(x306_);
+    int8x8_t x3010_ = vsub_s8(x307o, x308_);
+    int8x8_t x305oo = vand_s8(a1[3], b0);
+    int8x8_t x306__ = vbic_s8(b0, a1[3]);
+    int8x8_t x307oo = vcnt_s8(x305oo);
+    int8x8_t x308__ = vcnt_s8(x306__);
+    int8x8_t x309o = vsub_s8(x307oo, x308__);
+    int8x8_t x3011o = vshl_n_s8(x309o, 1);
+    int8x8_t x305ooo = vand_s8(a2[3], b0);
+    int8x8_t x306___ = vbic_s8(b0, a2[3]);
+    int8x8_t x307ooo = vcnt_s8(x305ooo);
+    int8x8_t x308___ = vcnt_s8(x306___);
+    int8x8_t x309oo = vsub_s8(x307ooo, x308___);
+    int8x8_t x3012_ = vshl_n_s8(x309oo, 2);
+    int8x8_t x305oooo = vbic_s8(b0, a3[3]);
+    int8x8_t x306____ = vand_s8(a3[3], b0);
+    int8x8_t x307oooo = vcnt_s8(x306____);
+    int8x8_t x308____ = vcnt_s8(x305oooo);
+    int8x8_t x309ooo = vsub_s8(x307oooo, x308____);
+    int8x8_t x3013o = vshl_n_s8(x309ooo, 3);
+    int8x8_t x3010__ = vadd_s8(x3010_, x3011o);
+    int8x8_t x3010___ = vadd_s8(x3010__, x3012_);
+    int8x8_t y3 = vadd_s8(x3010___, x3013o);
+    int8x8_t x405o = vand_s8(a0[4], b0);
+    int8x8_t x406_ = vbic_s8(b0, a0[4]);
+    int8x8_t x407o = vcnt_s8(x405o);
+    int8x8_t x408_ = vcnt_s8(x406_);
+    int8x8_t x4010_ = vsub_s8(x407o, x408_);
+    int8x8_t x405oo = vand_s8(a1[4], b0);
+    int8x8_t x406__ = vbic_s8(b0, a1[4]);
+    int8x8_t x407oo = vcnt_s8(x405oo);
+    int8x8_t x408__ = vcnt_s8(x406__);
+    int8x8_t x409o = vsub_s8(x407oo, x408__);
+    int8x8_t x4011o = vshl_n_s8(x409o, 1);
+    int8x8_t x405ooo = vand_s8(a2[4], b0);
+    int8x8_t x406___ = vbic_s8(b0, a2[4]);
+    int8x8_t x407ooo = vcnt_s8(x405ooo);
+    int8x8_t x408___ = vcnt_s8(x406___);
+    int8x8_t x409oo = vsub_s8(x407ooo, x408___);
+    int8x8_t x4012_ = vshl_n_s8(x409oo, 2);
+    int8x8_t x405oooo = vbic_s8(b0, a3[4]);
+    int8x8_t x406____ = vand_s8(a3[4], b0);
+    int8x8_t x407oooo = vcnt_s8(x406____);
+    int8x8_t x408____ = vcnt_s8(x405oooo);
+    int8x8_t x409ooo = vsub_s8(x407oooo, x408____);
+    int8x8_t x4013o = vshl_n_s8(x409ooo, 3);
+    int8x8_t x4010__ = vadd_s8(x4010_, x4011o);
+    int8x8_t x4010___ = vadd_s8(x4010__, x4012_);
+    int8x8_t y4 = vadd_s8(x4010___, x4013o);
+    int8x8_t x505o = vand_s8(a0[5], b0);
+    int8x8_t x506_ = vbic_s8(b0, a0[5]);
+    int8x8_t x507o = vcnt_s8(x505o);
+    int8x8_t x508_ = vcnt_s8(x506_);
+    int8x8_t x5010_ = vsub_s8(x507o, x508_);
+    int8x8_t x505oo = vand_s8(a1[5], b0);
+    int8x8_t x506__ = vbic_s8(b0, a1[5]);
+    int8x8_t x507oo = vcnt_s8(x505oo);
+    int8x8_t x508__ = vcnt_s8(x506__);
+    int8x8_t x509o = vsub_s8(x507oo, x508__);
+    int8x8_t x5011o = vshl_n_s8(x509o, 1);
+    int8x8_t x505ooo = vand_s8(a2[5], b0);
+    int8x8_t x506___ = vbic_s8(b0, a2[5]);
+    int8x8_t x507ooo = vcnt_s8(x505ooo);
+    int8x8_t x508___ = vcnt_s8(x506___);
+    int8x8_t x509oo = vsub_s8(x507ooo, x508___);
+    int8x8_t x5012_ = vshl_n_s8(x509oo, 2);
+    int8x8_t x505oooo = vbic_s8(b0, a3[5]);
+    int8x8_t x506____ = vand_s8(a3[5], b0);
+    int8x8_t x507oooo = vcnt_s8(x506____);
+    int8x8_t x508____ = vcnt_s8(x505oooo);
+    int8x8_t x509ooo = vsub_s8(x507oooo, x508____);
+    int8x8_t x5013o = vshl_n_s8(x509ooo, 3);
+    int8x8_t x5010__ = vadd_s8(x5010_, x5011o);
+    int8x8_t x5010___ = vadd_s8(x5010__, x5012_);
+    int8x8_t y5 = vadd_s8(x5010___, x5013o);
+    int8x8_t x605o = vand_s8(a0[6], b0);
+    int8x8_t x606_ = vbic_s8(b0, a0[6]);
+    int8x8_t x607o = vcnt_s8(x605o);
+    int8x8_t x608_ = vcnt_s8(x606_);
+    int8x8_t x6010_ = vsub_s8(x607o, x608_);
+    int8x8_t x605oo = vand_s8(a1[6], b0);
+    int8x8_t x606__ = vbic_s8(b0, a1[6]);
+    int8x8_t x607oo = vcnt_s8(x605oo);
+    int8x8_t x608__ = vcnt_s8(x606__);
+    int8x8_t x609o = vsub_s8(x607oo, x608__);
+    int8x8_t x6011o = vshl_n_s8(x609o, 1);
+    int8x8_t x605ooo = vand_s8(a2[6], b0);
+    int8x8_t x606___ = vbic_s8(b0, a2[6]);
+    int8x8_t x607ooo = vcnt_s8(x605ooo);
+    int8x8_t x608___ = vcnt_s8(x606___);
+    int8x8_t x609oo = vsub_s8(x607ooo, x608___);
+    int8x8_t x6012_ = vshl_n_s8(x609oo, 2);
+    int8x8_t x605oooo = vbic_s8(b0, a3[6]);
+    int8x8_t x606____ = vand_s8(a3[6], b0);
+    int8x8_t x607oooo = vcnt_s8(x606____);
+    int8x8_t x608____ = vcnt_s8(x605oooo);
+    int8x8_t x609ooo = vsub_s8(x607oooo, x608____);
+    int8x8_t x6013o = vshl_n_s8(x609ooo, 3);
+    int8x8_t x6010__ = vadd_s8(x6010_, x6011o);
+    int8x8_t x6010___ = vadd_s8(x6010__, x6012_);
+    int8x8_t y6 = vadd_s8(x6010___, x6013o);
+    int8x8_t x705o = vand_s8(a0[7], b0);
+    int8x8_t x706_ = vbic_s8(b0, a0[7]);
+    int8x8_t x707o = vcnt_s8(x705o);
+    int8x8_t x708_ = vcnt_s8(x706_);
+    int8x8_t x7010_ = vsub_s8(x707o, x708_);
+    int8x8_t x705oo = vand_s8(a1[7], b0);
+    int8x8_t x706__ = vbic_s8(b0, a1[7]);
+    int8x8_t x707oo = vcnt_s8(x705oo);
+    int8x8_t x708__ = vcnt_s8(x706__);
+    int8x8_t x709o = vsub_s8(x707oo, x708__);
+    int8x8_t x7011o = vshl_n_s8(x709o, 1);
+    int8x8_t x705ooo = vand_s8(a2[7], b0);
+    int8x8_t x706___ = vbic_s8(b0, a2[7]);
+    int8x8_t x707ooo = vcnt_s8(x705ooo);
+    int8x8_t x708___ = vcnt_s8(x706___);
+    int8x8_t x709oo = vsub_s8(x707ooo, x708___);
+    int8x8_t x7012_ = vshl_n_s8(x709oo, 2);
+    int8x8_t x705oooo = vbic_s8(b0, a3[7]);
+    int8x8_t x706____ = vand_s8(a3[7], b0);
+    int8x8_t x707oooo = vcnt_s8(x706____);
+    int8x8_t x708____ = vcnt_s8(x705oooo);
+    int8x8_t x709ooo = vsub_s8(x707oooo, x708____);
+    int8x8_t x7013o = vshl_n_s8(x709ooo, 3);
+    int8x8_t x7010__ = vadd_s8(x7010_, x7011o);
+    int8x8_t x7010___ = vadd_s8(x7010__, x7012_);
+    int8x8_t y7 = vadd_s8(x7010___, x7013o);
+    int8x16_t y0_ = vpaddlq_s8(vcombine_s8(y0, y1));
+    int8x16_t y2_ = vpaddlq_s8(vcombine_s8(y2, y3));
+    int8x16_t y4_ = vpaddlq_s8(vcombine_s8(y4, y5));
+    int8x16_t y6_ = vpaddlq_s8(vcombine_s8(y6, y7));
+    int16x4_t y0__ = vpadd_s16(vget_low_s16(y0_), vget_high_s16(y0_));
+    int16x4_t y0_o = vpadd_s16(vget_low_s16(y2_), vget_high_s16(y2_));
+    int16x4_t y2__ = vpadd_s16(vget_low_s16(y4_), vget_high_s16(y4_));
+    int16x4_t y2_o = vpadd_s16(vget_low_s16(y6_), vget_high_s16(y6_));
+    int16x4_t y0___ = vpadd_s16(y0__, y0_o);
+    int16x4_t y0_oo = vpadd_s16(y2__, y2_o);
+    int16x8_t out = vaddq_s16(vcombine_s16(y0___, y0_oo), output);
+     // store
+    vst1q_s16(dst, out);
+    return 0;
+}
+extern "C" int update_unipolar_a1b4_half(int8_t* src_a, int8_t* src_b, int16_t* dst, 
+    int a_str1, int a_str0, int b_str0){
+    // Data loading
+    int8x8_t a0[8];
+    for(int i = 0; i < 8; i++) {
+        int8x16_t aa0 = vld1q_s8(src_a + i*2*a_str0);
+        a0[2*i] = vget_low_s8(aa0);
+        a0[2*i + 1] = vget_high_s8(aa0);
+    }
+    int8x8_t b0 = vld1_s8(src_b);
+    int8x8_t b1 = vld1_s8(src_b + b_str0);
+    int8x8_t b2 = vld1_s8(src_b + 2 * b_str0);
+    int8x8_t b3 = vld1_s8(src_b + 3 * b_str0);
+    int16x8_t output = vld1q_s16(dst);
 
-    // todo data writeback
-    vst1q_u16(dst, d0____);
+    int8x8_t x005o = vbic_s8(b0, a0[0]);
+    int8x8_t x006_ = vand_s8(a0[0], b0);
+    int8x8_t x007o = vcnt_s8(x006_);
+    int8x8_t x008_ = vcnt_s8(x005o);
+    int8x8_t x0010_ = vsub_s8(x007o, x008_);
+    int8x8_t x005oo = vbic_s8(b1, a0[0]);
+    int8x8_t x006__ = vand_s8(a0[0], b1);
+    int8x8_t x007oo = vcnt_s8(x006__);
+    int8x8_t x008__ = vcnt_s8(x005oo);
+    int8x8_t x009o = vsub_s8(x007oo, x008__);
+    int8x8_t x0011o = vadd_s8(x009o, x009o);
+    int8x8_t x005ooo = vand_s8(a0[0], b2);
+    int8x8_t x006___ = vbic_s8(b2, a0[0]);
+    int8x8_t x007ooo = vcnt_s8(x005ooo);
+    int8x8_t x008___ = vcnt_s8(x006___);
+    int8x8_t x009oo = vsub_s8(x007ooo, x008___);
+    int8x8_t x0012_ = vshl_n_s8(x009oo, 2);
+    int8x8_t x005oooo = vand_s8(a0[0], b3);
+    int8x8_t x006____ = vbic_s8(b3, a0[0]);
+    int8x8_t x007oooo = vcnt_s8(x005oooo);
+    int8x8_t x008____ = vcnt_s8(x006____);
+    int8x8_t x009ooo = vsub_s8(x007oooo, x008____);
+    int8x8_t x0013o = vshl_n_s8(x009ooo, 3);
+    int8x8_t x0010__ = vadd_s8(x0010_, x0011o);
+    int8x8_t x0010___ = vadd_s8(x0010__, x0012_);
+    int8x8_t y0 = vadd_s8(x0010___, x0013o);
+    int8x8_t x105o = vbic_s8(b0, a0[1]);
+    int8x8_t x106_ = vand_s8(a0[1], b0);
+    int8x8_t x107o = vcnt_s8(x106_);
+    int8x8_t x108_ = vcnt_s8(x105o);
+    int8x8_t x1010_ = vsub_s8(x107o, x108_);
+    int8x8_t x105oo = vbic_s8(b1, a0[1]);
+    int8x8_t x106__ = vand_s8(a0[1], b1);
+    int8x8_t x107oo = vcnt_s8(x106__);
+    int8x8_t x108__ = vcnt_s8(x105oo);
+    int8x8_t x109o = vsub_s8(x107oo, x108__);
+    int8x8_t x1011o = vadd_s8(x109o, x109o);
+    int8x8_t x105ooo = vand_s8(a0[1], b2);
+    int8x8_t x106___ = vbic_s8(b2, a0[1]);
+    int8x8_t x107ooo = vcnt_s8(x105ooo);
+    int8x8_t x108___ = vcnt_s8(x106___);
+    int8x8_t x109oo = vsub_s8(x107ooo, x108___);
+    int8x8_t x1012_ = vshl_n_s8(x109oo, 2);
+    int8x8_t x105oooo = vand_s8(a0[1], b3);
+    int8x8_t x106____ = vbic_s8(b3, a0[1]);
+    int8x8_t x107oooo = vcnt_s8(x105oooo);
+    int8x8_t x108____ = vcnt_s8(x106____);
+    int8x8_t x109ooo = vsub_s8(x107oooo, x108____);
+    int8x8_t x1013o = vshl_n_s8(x109ooo, 3);
+    int8x8_t x1010__ = vadd_s8(x1010_, x1011o);
+    int8x8_t x1010___ = vadd_s8(x1010__, x1012_);
+    int8x8_t y1 = vadd_s8(x1010___, x1013o);
+    int8x8_t x205o = vbic_s8(b0, a0[2]);
+    int8x8_t x206_ = vand_s8(a0[2], b0);
+    int8x8_t x207o = vcnt_s8(x206_);
+    int8x8_t x208_ = vcnt_s8(x205o);
+    int8x8_t x2010_ = vsub_s8(x207o, x208_);
+    int8x8_t x205oo = vbic_s8(b1, a0[2]);
+    int8x8_t x206__ = vand_s8(a0[2], b1);
+    int8x8_t x207oo = vcnt_s8(x206__);
+    int8x8_t x208__ = vcnt_s8(x205oo);
+    int8x8_t x209o = vsub_s8(x207oo, x208__);
+    int8x8_t x2011o = vadd_s8(x209o, x209o);
+    int8x8_t x205ooo = vand_s8(a0[2], b2);
+    int8x8_t x206___ = vbic_s8(b2, a0[2]);
+    int8x8_t x207ooo = vcnt_s8(x205ooo);
+    int8x8_t x208___ = vcnt_s8(x206___);
+    int8x8_t x209oo = vsub_s8(x207ooo, x208___);
+    int8x8_t x2012_ = vshl_n_s8(x209oo, 2);
+    int8x8_t x205oooo = vand_s8(a0[2], b3);
+    int8x8_t x206____ = vbic_s8(b3, a0[2]);
+    int8x8_t x207oooo = vcnt_s8(x205oooo);
+    int8x8_t x208____ = vcnt_s8(x206____);
+    int8x8_t x209ooo = vsub_s8(x207oooo, x208____);
+    int8x8_t x2013o = vshl_n_s8(x209ooo, 3);
+    int8x8_t x2010__ = vadd_s8(x2010_, x2011o);
+    int8x8_t x2010___ = vadd_s8(x2010__, x2012_);
+    int8x8_t y2 = vadd_s8(x2010___, x2013o);
+    int8x8_t x305o = vbic_s8(b0, a0[3]);
+    int8x8_t x306_ = vand_s8(a0[3], b0);
+    int8x8_t x307o = vcnt_s8(x306_);
+    int8x8_t x308_ = vcnt_s8(x305o);
+    int8x8_t x3010_ = vsub_s8(x307o, x308_);
+    int8x8_t x305oo = vbic_s8(b1, a0[3]);
+    int8x8_t x306__ = vand_s8(a0[3], b1);
+    int8x8_t x307oo = vcnt_s8(x306__);
+    int8x8_t x308__ = vcnt_s8(x305oo);
+    int8x8_t x309o = vsub_s8(x307oo, x308__);
+    int8x8_t x3011o = vadd_s8(x309o, x309o);
+    int8x8_t x305ooo = vand_s8(a0[3], b2);
+    int8x8_t x306___ = vbic_s8(b2, a0[3]);
+    int8x8_t x307ooo = vcnt_s8(x305ooo);
+    int8x8_t x308___ = vcnt_s8(x306___);
+    int8x8_t x309oo = vsub_s8(x307ooo, x308___);
+    int8x8_t x3012_ = vshl_n_s8(x309oo, 2);
+    int8x8_t x305oooo = vand_s8(a0[3], b3);
+    int8x8_t x306____ = vbic_s8(b3, a0[3]);
+    int8x8_t x307oooo = vcnt_s8(x305oooo);
+    int8x8_t x308____ = vcnt_s8(x306____);
+    int8x8_t x309ooo = vsub_s8(x307oooo, x308____);
+    int8x8_t x3013o = vshl_n_s8(x309ooo, 3);
+    int8x8_t x3010__ = vadd_s8(x3010_, x3011o);
+    int8x8_t x3010___ = vadd_s8(x3010__, x3012_);
+    int8x8_t y3 = vadd_s8(x3010___, x3013o);
+    int8x8_t x405o = vbic_s8(b0, a0[4]);
+    int8x8_t x406_ = vand_s8(a0[4], b0);
+    int8x8_t x407o = vcnt_s8(x406_);
+    int8x8_t x408_ = vcnt_s8(x405o);
+    int8x8_t x4010_ = vsub_s8(x407o, x408_);
+    int8x8_t x405oo = vbic_s8(b1, a0[4]);
+    int8x8_t x406__ = vand_s8(a0[4], b1);
+    int8x8_t x407oo = vcnt_s8(x406__);
+    int8x8_t x408__ = vcnt_s8(x405oo);
+    int8x8_t x409o = vsub_s8(x407oo, x408__);
+    int8x8_t x4011o = vadd_s8(x409o, x409o);
+    int8x8_t x405ooo = vand_s8(a0[4], b2);
+    int8x8_t x406___ = vbic_s8(b2, a0[4]);
+    int8x8_t x407ooo = vcnt_s8(x405ooo);
+    int8x8_t x408___ = vcnt_s8(x406___);
+    int8x8_t x409oo = vsub_s8(x407ooo, x408___);
+    int8x8_t x4012_ = vshl_n_s8(x409oo, 2);
+    int8x8_t x405oooo = vand_s8(a0[4], b3);
+    int8x8_t x406____ = vbic_s8(b3, a0[4]);
+    int8x8_t x407oooo = vcnt_s8(x405oooo);
+    int8x8_t x408____ = vcnt_s8(x406____);
+    int8x8_t x409ooo = vsub_s8(x407oooo, x408____);
+    int8x8_t x4013o = vshl_n_s8(x409ooo, 3);
+    int8x8_t x4010__ = vadd_s8(x4010_, x4011o);
+    int8x8_t x4010___ = vadd_s8(x4010__, x4012_);
+    int8x8_t y4 = vadd_s8(x4010___, x4013o);
+    int8x8_t x505o = vbic_s8(b0, a0[5]);
+    int8x8_t x506_ = vand_s8(a0[5], b0);
+    int8x8_t x507o = vcnt_s8(x506_);
+    int8x8_t x508_ = vcnt_s8(x505o);
+    int8x8_t x5010_ = vsub_s8(x507o, x508_);
+    int8x8_t x505oo = vbic_s8(b1, a0[5]);
+    int8x8_t x506__ = vand_s8(a0[5], b1);
+    int8x8_t x507oo = vcnt_s8(x506__);
+    int8x8_t x508__ = vcnt_s8(x505oo);
+    int8x8_t x509o = vsub_s8(x507oo, x508__);
+    int8x8_t x5011o = vadd_s8(x509o, x509o);
+    int8x8_t x505ooo = vand_s8(a0[5], b2);
+    int8x8_t x506___ = vbic_s8(b2, a0[5]);
+    int8x8_t x507ooo = vcnt_s8(x505ooo);
+    int8x8_t x508___ = vcnt_s8(x506___);
+    int8x8_t x509oo = vsub_s8(x507ooo, x508___);
+    int8x8_t x5012_ = vshl_n_s8(x509oo, 2);
+    int8x8_t x505oooo = vand_s8(a0[5], b3);
+    int8x8_t x506____ = vbic_s8(b3, a0[5]);
+    int8x8_t x507oooo = vcnt_s8(x505oooo);
+    int8x8_t x508____ = vcnt_s8(x506____);
+    int8x8_t x509ooo = vsub_s8(x507oooo, x508____);
+    int8x8_t x5013o = vshl_n_s8(x509ooo, 3);
+    int8x8_t x5010__ = vadd_s8(x5010_, x5011o);
+    int8x8_t x5010___ = vadd_s8(x5010__, x5012_);
+    int8x8_t y5 = vadd_s8(x5010___, x5013o);
+    int8x8_t x605o = vbic_s8(b0, a0[6]);
+    int8x8_t x606_ = vand_s8(a0[6], b0);
+    int8x8_t x607o = vcnt_s8(x606_);
+    int8x8_t x608_ = vcnt_s8(x605o);
+    int8x8_t x6010_ = vsub_s8(x607o, x608_);
+    int8x8_t x605oo = vbic_s8(b1, a0[6]);
+    int8x8_t x606__ = vand_s8(a0[6], b1);
+    int8x8_t x607oo = vcnt_s8(x606__);
+    int8x8_t x608__ = vcnt_s8(x605oo);
+    int8x8_t x609o = vsub_s8(x607oo, x608__);
+    int8x8_t x6011o = vadd_s8(x609o, x609o);
+    int8x8_t x605ooo = vand_s8(a0[6], b2);
+    int8x8_t x606___ = vbic_s8(b2, a0[6]);
+    int8x8_t x607ooo = vcnt_s8(x605ooo);
+    int8x8_t x608___ = vcnt_s8(x606___);
+    int8x8_t x609oo = vsub_s8(x607ooo, x608___);
+    int8x8_t x6012_ = vshl_n_s8(x609oo, 2);
+    int8x8_t x605oooo = vand_s8(a0[6], b3);
+    int8x8_t x606____ = vbic_s8(b3, a0[6]);
+    int8x8_t x607oooo = vcnt_s8(x605oooo);
+    int8x8_t x608____ = vcnt_s8(x606____);
+    int8x8_t x609ooo = vsub_s8(x607oooo, x608____);
+    int8x8_t x6013o = vshl_n_s8(x609ooo, 3);
+    int8x8_t x6010__ = vadd_s8(x6010_, x6011o);
+    int8x8_t x6010___ = vadd_s8(x6010__, x6012_);
+    int8x8_t y6 = vadd_s8(x6010___, x6013o);
+    int8x8_t x705o = vbic_s8(b0, a0[7]);
+    int8x8_t x706_ = vand_s8(a0[7], b0);
+    int8x8_t x707o = vcnt_s8(x706_);
+    int8x8_t x708_ = vcnt_s8(x705o);
+    int8x8_t x7010_ = vsub_s8(x707o, x708_);
+    int8x8_t x705oo = vbic_s8(b1, a0[7]);
+    int8x8_t x706__ = vand_s8(a0[7], b1);
+    int8x8_t x707oo = vcnt_s8(x706__);
+    int8x8_t x708__ = vcnt_s8(x705oo);
+    int8x8_t x709o = vsub_s8(x707oo, x708__);
+    int8x8_t x7011o = vadd_s8(x709o, x709o);
+    int8x8_t x705ooo = vand_s8(a0[7], b2);
+    int8x8_t x706___ = vbic_s8(b2, a0[7]);
+    int8x8_t x707ooo = vcnt_s8(x705ooo);
+    int8x8_t x708___ = vcnt_s8(x706___);
+    int8x8_t x709oo = vsub_s8(x707ooo, x708___);
+    int8x8_t x7012_ = vshl_n_s8(x709oo, 2);
+    int8x8_t x705oooo = vand_s8(a0[7], b3);
+    int8x8_t x706____ = vbic_s8(b3, a0[7]);
+    int8x8_t x707oooo = vcnt_s8(x705oooo);
+    int8x8_t x708____ = vcnt_s8(x706____);
+    int8x8_t x709ooo = vsub_s8(x707oooo, x708____);
+    int8x8_t x7013o = vshl_n_s8(x709ooo, 3);
+    int8x8_t x7010__ = vadd_s8(x7010_, x7011o);
+    int8x8_t x7010___ = vadd_s8(x7010__, x7012_);
+    int8x8_t y7 = vadd_s8(x7010___, x7013o);
+    int8x16_t y0_ = vpaddlq_s8(vcombine_s8(y0, y1));
+    int8x16_t y2_ = vpaddlq_s8(vcombine_s8(y2, y3));
+    int8x16_t y4_ = vpaddlq_s8(vcombine_s8(y4, y5));
+    int8x16_t y6_ = vpaddlq_s8(vcombine_s8(y6, y7));
+    int16x4_t y0__ = vpadd_s16(vget_low_s16(y0_), vget_high_s16(y0_));
+    int16x4_t y0_o = vpadd_s16(vget_low_s16(y2_), vget_high_s16(y2_));
+    int16x4_t y2__ = vpadd_s16(vget_low_s16(y4_), vget_high_s16(y4_));
+    int16x4_t y2_o = vpadd_s16(vget_low_s16(y6_), vget_high_s16(y6_));
+    int16x4_t y0___ = vpadd_s16(y0__, y0_o);
+    int16x4_t y0_oo = vpadd_s16(y2__, y2_o);
+    int16x8_t out = vaddq_s16(vcombine_s16(y0___, y0_oo), output);
+
+     // store
+    vst1q_s16(dst, out);
     return 0;
 }
 
-extern "C" int update_bipolar_a1b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
-    int a_str1, int a_str0, int b_str0){
-    // todo - data loading
-    uint8x8_t aa[8];
-    uint8x8_t a[8];
-    for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + i*a_str0);
-    uint8x8_t b = vld1_u8(src_b);
-    uint16x8_t output = vld1q_u16(dst);
-
-    // from racket phase 1: 
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b);
-        a[i] = vcnt_u8(temp);
-    }
-
-    // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1_u8(src_b + b_str0);
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b);
-        temp = vcnt_u8(temp);
-        temp = vshl_n_u8(temp, 1);
-        a[i] = vadd_u8(a[i], temp);
-    }
-
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(a[0], a[1]);
-    uint8x8_t d1_ = vpadd_u8(a[2], a[3]);
-    uint8x8_t d2_ = vpadd_u8(a[4], a[5]);
-    uint8x8_t d3_ = vpadd_u8(a[6], a[7]);
-    
-    uint8x8_t d0__ = vpadd_u8(d0_, d1_);
-    uint8x8_t d1__ = vpadd_u8(d2_, d3_);
-    
-    // TODO: print combine
-    uint16x8_t d0____ = vpadalq_u8(output, vcombine_u8(d0__, d1__));
-
-    // todo data writeback
-    vst1q_u16(dst, d0____);
-    return 0;
-}
-
-extern "C" int update_bipolar_a2b2_half(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
-    int a_str1, int a_str0, int b_str0){
-    // todo - data loading
-    uint8x8_t a[8];
-
-    uint8x8_t aa[8];
-    for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + i*a_str0);
-    uint8x8_t b0 = vld1_u8(src_b);
-    uint8x8_t b1 = vld1_u8(src_b + b_str0);
-    uint16x8_t output = vld1q_u16(dst);
-
-    // from racket phase 1: Manually unrolling from example because vshl must be constant
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b0);
-        a[i] = vcnt_u8(temp);
-    }
-    
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b1);
-        temp = vcnt_u8(temp);
-        temp = vshl_n_u8(temp, 1);
-        a[i] = vadd_u8(a[i], temp);
-    }
-
-    //Load bitplane 1 of a
-     for(int i = 0; i < 8; i++)
-        aa[i] = vld1_u8(src_a + a_str1 + i*a_str0);
-
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b0);
-        temp = vcnt_u8(temp);
-        temp = vshl_n_u8(temp, 1);
-        a[i] = vadd_u8(a[i], temp);
-    }
-    
-    for(int i = 0; i < 8; i++) {
-        uint8x8_t temp = vand_u8(aa[i], b1);
-        temp = vcnt_u8(temp);
-        temp = vshl_n_u8(temp, 2);
-        a[i] = vadd_u8(a[i], temp);
-    }
-
-
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(a[0], a[1]);
-    uint8x8_t d1_ = vpadd_u8(a[2], a[3]);
-    uint8x8_t d2_ = vpadd_u8(a[4], a[5]);
-    uint8x8_t d3_ = vpadd_u8(a[6], a[7]);
-
-    uint16x8_t q0_ = vpaddlq_u8(vcombine_u8(d0_, d1_));
-    uint16x8_t q1_ = vpaddlq_u8(vcombine_u8(d2_, d3_));
-    
-    uint16x4_t d0__  = vpadd_u16(vget_low_u16(q0_), vget_high_u16(q0_));
-    uint16x4_t d1__  = vpadd_u16(vget_low_u16(q1_), vget_high_u16(q1_));
-
-    // accumulate
-    uint16x8_t d0___ = vaddq_u16(output, vcombine_u16(d0__, d1__));
-
-    // todo data writebacks
-    vst1q_u16(dst, d0___);
-    return 0;
-}
 
 ///// 8x16x1 microkernels
 extern "C" int update_unipolar_a1b1(int8_t* src_a, int8_t* src_b, int16_t* dst, 
@@ -1135,6 +1495,7 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int a_str1, int a_str0, int b_str0){
     // Data loading
     int8x16_t a0[8];
+    int8x16_t x[8];
     int8x16_t b0 = vld1q_s8(src_b);
     int8x16_t b1 = vld1q_s8(src_b + b_str0);
     int16x8_t output = vld1q_s16(dst);
@@ -1146,13 +1507,15 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x0016_ = vcntq_s8(x0012_);
     int8x16_t x0018_ = vcntq_s8(x0014_);
     int8x16_t x0020_ = vsubq_s8(x0016_, x0018_);
+
     int8x16_t x0012__ = vandq_s8(a0[0], b1);
     int8x16_t x0014__ = vcntq_s8(x0012__);
     int8x16_t x0016__ = vbicq_s8(b1, a0[0]);
     int8x16_t x0018__ = vcntq_s8(x0016__);
     int8x16_t x0020__ = vsubq_s8(x0014__, x0018__);
     int8x16_t x0022_ = vaddq_s8(x0020__, x0020__);
-    int8x16_t y0 = vaddq_s8(x0020__, x0022_);
+    int8x16_t y0 = vaddq_s8(x0020_, x0022_);
+
     int8x16_t x1012_ = vandq_s8(a0[1], b0);
     int8x16_t x1014_ = vbicq_s8(b0, a0[1]);
     int8x16_t x1016_ = vcntq_s8(x1012_);
@@ -1164,7 +1527,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x1018__ = vcntq_s8(x1016__);
     int8x16_t x1020__ = vsubq_s8(x1014__, x1018__);
     int8x16_t x1022_ = vaddq_s8(x1020__, x1020__);
-    int8x16_t y1 = vaddq_s8(x1020__, x1022_);
+    int8x16_t y1 = vaddq_s8(x1020_, x1022_);
+
     int8x16_t x2012_ = vandq_s8(a0[2], b0);
     int8x16_t x2014_ = vbicq_s8(b0, a0[2]);
     int8x16_t x2016_ = vcntq_s8(x2012_);
@@ -1176,7 +1540,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x2018__ = vcntq_s8(x2016__);
     int8x16_t x2020__ = vsubq_s8(x2014__, x2018__);
     int8x16_t x2022_ = vaddq_s8(x2020__, x2020__);
-    int8x16_t y2 = vaddq_s8(x2020__, x2022_);
+    int8x16_t y2 = vaddq_s8(x2020_, x2022_);
+
     int8x16_t x3012_ = vandq_s8(a0[3], b0);
     int8x16_t x3014_ = vbicq_s8(b0, a0[3]);
     int8x16_t x3016_ = vcntq_s8(x3012_);
@@ -1188,7 +1553,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x3018__ = vcntq_s8(x3016__);
     int8x16_t x3020__ = vsubq_s8(x3014__, x3018__);
     int8x16_t x3022_ = vaddq_s8(x3020__, x3020__);
-    int8x16_t y3 = vaddq_s8(x3020__, x3022_);
+    int8x16_t y3 = vaddq_s8(x3020_, x3022_);
+
     int8x16_t x4012_ = vandq_s8(a0[4], b0);
     int8x16_t x4014_ = vbicq_s8(b0, a0[4]);
     int8x16_t x4016_ = vcntq_s8(x4012_);
@@ -1200,7 +1566,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x4018__ = vcntq_s8(x4016__);
     int8x16_t x4020__ = vsubq_s8(x4014__, x4018__);
     int8x16_t x4022_ = vaddq_s8(x4020__, x4020__);
-    int8x16_t y4 = vaddq_s8(x4020__, x4022_);
+    int8x16_t y4 = vaddq_s8(x4020_, x4022_);
+
     int8x16_t x5012_ = vandq_s8(a0[5], b0);
     int8x16_t x5014_ = vbicq_s8(b0, a0[5]);
     int8x16_t x5016_ = vcntq_s8(x5012_);
@@ -1212,7 +1579,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x5018__ = vcntq_s8(x5016__);
     int8x16_t x5020__ = vsubq_s8(x5014__, x5018__);
     int8x16_t x5022_ = vaddq_s8(x5020__, x5020__);
-    int8x16_t y5 = vaddq_s8(x5020__, x5022_);
+    int8x16_t y5 = vaddq_s8(x5020_, x5022_);
+
     int8x16_t x6012_ = vandq_s8(a0[6], b0);
     int8x16_t x6014_ = vbicq_s8(b0, a0[6]);
     int8x16_t x6016_ = vcntq_s8(x6012_);
@@ -1224,7 +1592,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x6018__ = vcntq_s8(x6016__);
     int8x16_t x6020__ = vsubq_s8(x6014__, x6018__);
     int8x16_t x6022_ = vaddq_s8(x6020__, x6020__);
-    int8x16_t y6 = vaddq_s8(x6020__, x6022_);
+    int8x16_t y6 = vaddq_s8(x6020_, x6022_);
+
     int8x16_t x7012_ = vandq_s8(a0[7], b0);
     int8x16_t x7014_ = vbicq_s8(b0, a0[7]);
     int8x16_t x7016_ = vcntq_s8(x7012_);
@@ -1236,7 +1605,8 @@ extern "C" int update_unipolar_a1b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x7018__ = vcntq_s8(x7016__);
     int8x16_t x7020__ = vsubq_s8(x7014__, x7018__);
     int8x16_t x7022_ = vaddq_s8(x7020__, x7020__);
-    int8x16_t y7 = vaddq_s8(x7020__, x7022_);
+    int8x16_t y7 = vaddq_s8(x7020_, x7022_);
+
     int8x8_t y0_ = vpadd_s8(vget_low_s8(y0), vget_high_s8(y0));
     int8x8_t y0o = vpadd_s8(vget_low_s8(y1), vget_high_s8(y1));
     int8x8_t y1_ = vpadd_s8(vget_low_s8(y2), vget_high_s8(y2));
@@ -1265,16 +1635,14 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     // Data loading
     int8x16_t a0[8];
     int8x16_t a1[8];
+    int8x16_t b0 = vld1q_s8(src_b);
+    int8x16_t b1 = vld1q_s8(src_b + b_str0);  
     int16x8_t output = vld1q_s16(dst);
-
-    uint8x16_t a[8];
     for(int i = 0; i < 8; i++) {
         a0[i] = vld1q_s8(src_a + i*a_str0);
         a1[i] = vld1q_s8(src_a + a_str1 + i*a_str0);
     }
-    uint8x16_t b0 = vld1q_s8(src_b);
-    uint8x16_t b1 = vld1q_s8(src_b + b_str0);
-            
+
     int8x16_t x0016_ = vbicq_s8(b0, a0[0]);
     int8x16_t x0018_ = vandq_s8(a0[0], b0);
     int8x16_t x0020_ = vcntq_s8(x0018_);
@@ -1298,10 +1666,12 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x0022_____ = vcntq_s8(x0020_____);
     int8x16_t x0024____ = vsubq_s8(x0018____, x0022_____);
     int8x16_t x0026_ = vshlq_n_s8(x0024____, 2);
-    int8x16_t x0020______ = vaddq_s8(x0020_____, x0022_____);
-    int8x16_t x0020_______ = vaddq_s8(x0020______, x0024____);
+    int8x16_t x0020______ = vaddq_s8(x0020__, x0022___);
+    int8x16_t x0020_______ = vaddq_s8(x0020______, x0024___);
     int8x16_t y0 = vaddq_s8(x0020_______, x0026_);
-    int8x16_t x1016_ = vbicq_s8(b0, a0[1]);
+
+
+   int8x16_t x1016_ = vbicq_s8(b0, a0[1]);
     int8x16_t x1018_ = vandq_s8(a0[1], b0);
     int8x16_t x1020_ = vcntq_s8(x1018_);
     int8x16_t x1022_ = vcntq_s8(x1016_);
@@ -1324,9 +1694,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x1022_____ = vcntq_s8(x1020_____);
     int8x16_t x1024____ = vsubq_s8(x1018____, x1022_____);
     int8x16_t x1026_ = vshlq_n_s8(x1024____, 2);
-    int8x16_t x1020______ = vaddq_s8(x1020_____, x1022_____);
-    int8x16_t x1020_______ = vaddq_s8(x1020______, x1024____);
+    int8x16_t x1020______ = vaddq_s8(x1020__, x1022___);
+    int8x16_t x1020_______ = vaddq_s8(x1020______, x1024___);
     int8x16_t y1 = vaddq_s8(x1020_______, x1026_);
+
     int8x16_t x2016_ = vbicq_s8(b0, a0[2]);
     int8x16_t x2018_ = vandq_s8(a0[2], b0);
     int8x16_t x2020_ = vcntq_s8(x2018_);
@@ -1350,9 +1721,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x2022_____ = vcntq_s8(x2020_____);
     int8x16_t x2024____ = vsubq_s8(x2018____, x2022_____);
     int8x16_t x2026_ = vshlq_n_s8(x2024____, 2);
-    int8x16_t x2020______ = vaddq_s8(x2020_____, x2022_____);
-    int8x16_t x2020_______ = vaddq_s8(x2020______, x2024____);
+    int8x16_t x2020______ = vaddq_s8(x2020__, x2022___);
+    int8x16_t x2020_______ = vaddq_s8(x2020______, x2024___);
     int8x16_t y2 = vaddq_s8(x2020_______, x2026_);
+
     int8x16_t x3016_ = vbicq_s8(b0, a0[3]);
     int8x16_t x3018_ = vandq_s8(a0[3], b0);
     int8x16_t x3020_ = vcntq_s8(x3018_);
@@ -1376,9 +1748,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x3022_____ = vcntq_s8(x3020_____);
     int8x16_t x3024____ = vsubq_s8(x3018____, x3022_____);
     int8x16_t x3026_ = vshlq_n_s8(x3024____, 2);
-    int8x16_t x3020______ = vaddq_s8(x3020_____, x3022_____);
-    int8x16_t x3020_______ = vaddq_s8(x3020______, x3024____);
+    int8x16_t x3020______ = vaddq_s8(x3020__, x3022___);
+    int8x16_t x3020_______ = vaddq_s8(x3020______, x3024___);
     int8x16_t y3 = vaddq_s8(x3020_______, x3026_);
+
     int8x16_t x4016_ = vbicq_s8(b0, a0[4]);
     int8x16_t x4018_ = vandq_s8(a0[4], b0);
     int8x16_t x4020_ = vcntq_s8(x4018_);
@@ -1402,9 +1775,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x4022_____ = vcntq_s8(x4020_____);
     int8x16_t x4024____ = vsubq_s8(x4018____, x4022_____);
     int8x16_t x4026_ = vshlq_n_s8(x4024____, 2);
-    int8x16_t x4020______ = vaddq_s8(x4020_____, x4022_____);
-    int8x16_t x4020_______ = vaddq_s8(x4020______, x4024____);
+    int8x16_t x4020______ = vaddq_s8(x4020__, x4022___);
+    int8x16_t x4020_______ = vaddq_s8(x4020______, x4024___);
     int8x16_t y4 = vaddq_s8(x4020_______, x4026_);
+
     int8x16_t x5016_ = vbicq_s8(b0, a0[5]);
     int8x16_t x5018_ = vandq_s8(a0[5], b0);
     int8x16_t x5020_ = vcntq_s8(x5018_);
@@ -1428,9 +1802,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x5022_____ = vcntq_s8(x5020_____);
     int8x16_t x5024____ = vsubq_s8(x5018____, x5022_____);
     int8x16_t x5026_ = vshlq_n_s8(x5024____, 2);
-    int8x16_t x5020______ = vaddq_s8(x5020_____, x5022_____);
-    int8x16_t x5020_______ = vaddq_s8(x5020______, x5024____);
+    int8x16_t x5020______ = vaddq_s8(x5020__, x5022___);
+    int8x16_t x5020_______ = vaddq_s8(x5020______, x5024___);
     int8x16_t y5 = vaddq_s8(x5020_______, x5026_);
+
     int8x16_t x6016_ = vbicq_s8(b0, a0[6]);
     int8x16_t x6018_ = vandq_s8(a0[6], b0);
     int8x16_t x6020_ = vcntq_s8(x6018_);
@@ -1454,9 +1829,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x6022_____ = vcntq_s8(x6020_____);
     int8x16_t x6024____ = vsubq_s8(x6018____, x6022_____);
     int8x16_t x6026_ = vshlq_n_s8(x6024____, 2);
-    int8x16_t x6020______ = vaddq_s8(x6020_____, x6022_____);
-    int8x16_t x6020_______ = vaddq_s8(x6020______, x6024____);
+    int8x16_t x6020______ = vaddq_s8(x6020__, x6022___);
+    int8x16_t x6020_______ = vaddq_s8(x6020______, x6024___);
     int8x16_t y6 = vaddq_s8(x6020_______, x6026_);
+
     int8x16_t x7016_ = vbicq_s8(b0, a0[7]);
     int8x16_t x7018_ = vandq_s8(a0[7], b0);
     int8x16_t x7020_ = vcntq_s8(x7018_);
@@ -1480,9 +1856,10 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x16_t x7022_____ = vcntq_s8(x7020_____);
     int8x16_t x7024____ = vsubq_s8(x7018____, x7022_____);
     int8x16_t x7026_ = vshlq_n_s8(x7024____, 2);
-    int8x16_t x7020______ = vaddq_s8(x7020_____, x7022_____);
-    int8x16_t x7020_______ = vaddq_s8(x7020______, x7024____);
+    int8x16_t x7020______ = vaddq_s8(x7020__, x7022___);
+    int8x16_t x7020_______ = vaddq_s8(x7020______, x7024___);
     int8x16_t y7 = vaddq_s8(x7020_______, x7026_);
+
     int8x8_t y0_ = vpadd_s8(vget_low_s8(y0), vget_high_s8(y0));
     int8x8_t y0o = vpadd_s8(vget_low_s8(y1), vget_high_s8(y1));
     int8x8_t y1_ = vpadd_s8(vget_low_s8(y2), vget_high_s8(y2));
@@ -1491,16 +1868,20 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     int8x8_t y2o = vpadd_s8(vget_low_s8(y5), vget_high_s8(y5));
     int8x8_t y3_ = vpadd_s8(vget_low_s8(y6), vget_high_s8(y6));
     int8x8_t y3o = vpadd_s8(vget_low_s8(y7), vget_high_s8(y7));
+
     int8x16_t y0__ = vpaddlq_s8(vcombine_s8(y0_, y0o));
     int8x16_t y1__ = vpaddlq_s8(vcombine_s8(y1_, y1o));
     int8x16_t y2__ = vpaddlq_s8(vcombine_s8(y2_, y2o));
     int8x16_t y3__ = vpaddlq_s8(vcombine_s8(y3_, y3o));
+
     int16x4_t y0___ = vpadd_s16(vget_low_s16(y0__), vget_high_s16(y0__));
     int16x4_t y0__o = vpadd_s16(vget_low_s16(y1__), vget_high_s16(y1__));
     int16x4_t y1___ = vpadd_s16(vget_low_s16(y2__), vget_high_s16(y2__));
     int16x4_t y1__o = vpadd_s16(vget_low_s16(y3__), vget_high_s16(y3__));
+
     int16x4_t y0____ = vpadd_s16(y0___, y0__o);
     int16x4_t y0__oo = vpadd_s16(y1___, y1__o);
+
     int16x8_t out = vaddq_s16(vcombine_s16(y0____, y0__oo), output);
 
     // todo data writeback
@@ -1508,228 +1889,3 @@ extern "C" int update_unipolar_a2b2(int8_t* src_a, int8_t* src_b, int16_t* dst,
     return 0;
 }
 
-extern "C" int update_bipolar_a1b1(uint8_t* src_a, uint8_t* src_b, uint16_t* dst,  
-    int a_str1, int a_str0, int b_str0){
-
-    // todo - data loading
-    uint8x16_t a[8];
-    for(int i = 0; i < 8; i++)
-        a[i] = vld1q_u8(src_a + i*a_str0);
-    uint8x16_t b = vld1q_u8(src_b);
-    uint16x8_t output = vld1q_u16(dst);
-
-    // from racket phase 1: 
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(a[i], b);
-        a[i] = vcntq_u8(temp);
-    }
-
-    // todo - naming the upper and lower half 
-    uint8x8_t d0 = vget_high_u8(a[0]);
-    uint8x8_t d1 = vget_low_u8(a[0]);
-    uint8x8_t d2 = vget_high_u8(a[1]);
-    uint8x8_t d3 = vget_low_u8(a[1]);
-    uint8x8_t d4 = vget_high_u8(a[2]);
-    uint8x8_t d5 = vget_low_u8(a[2]);
-    uint8x8_t d6 = vget_high_u8(a[3]);
-    uint8x8_t d7 = vget_low_u8(a[3]);
-    uint8x8_t d8 = vget_high_u8(a[4]);
-    uint8x8_t d9 = vget_low_u8(a[4]);
-    uint8x8_t d10 = vget_high_u8(a[5]);
-    uint8x8_t d11 = vget_low_u8(a[5]);
-    uint8x8_t d12 = vget_high_u8(a[6]);
-    uint8x8_t d13 = vget_low_u8(a[6]);
-    uint8x8_t d14 = vget_high_u8(a[7]);
-    uint8x8_t d15 = vget_low_u8(a[7]);
-
-
-
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(d0, d1);
-    uint8x8_t d1_ = vpadd_u8(d2, d3);
-    uint8x8_t d2_ = vpadd_u8(d4, d5);
-    uint8x8_t d3_ = vpadd_u8(d6, d7);
-    uint8x8_t d4_ = vpadd_u8(d8, d9);
-    uint8x8_t d5_ = vpadd_u8(d10, d11);
-    uint8x8_t d6_ = vpadd_u8(d12, d13);
-    uint8x8_t d7_ = vpadd_u8(d14, d15);
-    uint8x8_t d0__ = vpadd_u8(d0_, d1_);
-    uint8x8_t d1__ = vpadd_u8(d2_, d3_);
-    uint8x8_t d2__ = vpadd_u8(d4_, d5_);
-    uint8x8_t d3__ = vpadd_u8(d6_, d7_);
-    uint8x8_t d0___ = vpadd_u8(d0__, d1__);
-    uint8x8_t d1___ = vpadd_u8(d2__, d3__);
-    // TODO: print combine
-    uint16x8_t d0____ = vpadalq_u8(output, vcombine_u8(d0___, d1___));
-
-    // todo data writeback
-    vst1q_u16(dst, d0____);
-    return 0;
-
-}
-
-extern "C" int update_bipolar_a1b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
-    int a_str1, int a_str0, int b_str0){
-    // todo - data loading
-    uint8x16_t x[8];
-    uint16x8_t output = vld1q_u16(dst);
-
-    // Zero out the register
-    for (int i = 0; i < 8; i++) {
-        x[i] = veorq_u8(x[i], x[i]);
-    }
-
-    uint8x16_t a[8];
-    for(int i = 0; i < 8; i++)
-        a[i] = vld1q_u8(src_a + a_str0*i);
-    uint8x16_t b = vld1q_u8(src_b);
-            
-
-    // Part 1: elementwise ops, popcount, shifts, adding bitplanes
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(a[i], b);
-        x[i] = vcntq_u8(temp);
-    }
-
-    // B's second bitplane ooops forgot vshl has to get take a constant
-    b = vld1q_u8(src_b + b_str0);
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(a[i], b);
-        temp = vcntq_u8(temp);
-        temp = vshlq_n_u8(temp, 1);
-        x[i] = vaddq_u8(x[i], temp);
-    }
-
-    // todo - naming the upper and lower half 
-    uint8x8_t d0 = vget_high_u8(x[0]);
-    uint8x8_t d1 = vget_low_u8(x[0]);
-    uint8x8_t d2 = vget_high_u8(x[1]);
-    uint8x8_t d3 = vget_low_u8(x[1]);
-    uint8x8_t d4 = vget_high_u8(x[2]);
-    uint8x8_t d5 = vget_low_u8(x[2]);
-    uint8x8_t d6 = vget_high_u8(x[3]);
-    uint8x8_t d7 = vget_low_u8(x[3]);
-    uint8x8_t d8 = vget_high_u8(x[4]);
-    uint8x8_t d9 = vget_low_u8(x[4]);
-    uint8x8_t d10 = vget_high_u8(x[5]);
-    uint8x8_t d11 = vget_low_u8(x[5]);
-    uint8x8_t d12 = vget_high_u8(x[6]);
-    uint8x8_t d13 = vget_low_u8(x[6]);
-    uint8x8_t d14 = vget_high_u8(x[7]);
-    uint8x8_t d15 = vget_low_u8(x[7]);
-
-
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(d0, d1);
-    uint8x8_t d1_ = vpadd_u8(d2, d3);
-    uint8x8_t d2_ = vpadd_u8(d4, d5);
-    uint8x8_t d3_ = vpadd_u8(d6, d7);
-    uint8x8_t d4_ = vpadd_u8(d8, d9);
-    uint8x8_t d5_ = vpadd_u8(d10, d11);
-    uint8x8_t d6_ = vpadd_u8(d12, d13);
-    uint8x8_t d7_ = vpadd_u8(d14, d15);
-    uint8x8_t d0__ = vpadd_u8(d0_, d1_);
-    uint8x8_t d1__ = vpadd_u8(d2_, d3_);
-    uint8x8_t d2__ = vpadd_u8(d4_, d5_);
-    uint8x8_t d3__ = vpadd_u8(d6_, d7_);
-    uint8x8_t d0___ = vpadd_u8(d0__, d1__);
-    uint8x8_t d1___ = vpadd_u8(d2__, d3__);
-    // TODO: print combine
-    uint16x8_t d0____ = vpadalq_u8(output, vcombine_u8(d0___, d1___));
-
-    // todo data writeback
-    vst1q_u16(dst, d0____);
-    return 0;
-}
-
-extern "C" int update_bipolar_a2b2(uint8_t* src_a, uint8_t* src_b, uint16_t* dst, 
-    int a_str1, int a_str0, int b_str0){
-    // todo - data loading
-    uint8x16_t x[8];
-
-    uint8x16_t aa[8];
-    for(int i = 0; i < 8; i++)
-        aa[i] = vld1q_u8(src_a + i*a_str0);
-    uint8x16_t b0 = vld1q_u8(src_b);
-    uint8x16_t b1 = vld1q_u8(src_b + b_str0);
-    uint16x8_t output = vld1q_u16(dst);
-
-    // from racket phase 1: Manually unrolling from example because vshl must be constant
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(aa[i], b0);
-        x[i] = vcntq_u8(temp);
-    }
-    
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(aa[i], b1);
-        temp = vcntq_u8(temp);
-        temp = vshlq_n_u8(temp, 1);
-        x[i] = vaddq_u8(x[i], temp);
-    }
-
-    //Load bitplane 1 of a
-     for(int i = 0; i < 8; i++)
-        aa[i] = vld1q_u8(src_a + a_str1 + i*a_str0);
-
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(aa[i], b0);
-        temp = vcntq_u8(temp);
-        temp = vshlq_n_u8(temp, 1);
-        x[i] = vaddq_u8(x[i], temp);
-    }
-    
-    for(int i = 0; i < 8; i++) {
-        uint8x16_t temp = vandq_u8(aa[i], b1);
-        temp = vcntq_u8(temp);
-        temp = vshlq_n_u8(temp, 2);
-        x[i] = vaddq_u8(x[i], temp);
-    }
-
-    // todo - naming the upper and lower half 
-    uint8x8_t d0 = vget_high_u8(x[0]);
-    uint8x8_t d1 = vget_low_u8(x[0]);
-    uint8x8_t d2 = vget_high_u8(x[1]);
-    uint8x8_t d3 = vget_low_u8(x[1]);
-    uint8x8_t d4 = vget_high_u8(x[2]);
-    uint8x8_t d5 = vget_low_u8(x[2]);
-    uint8x8_t d6 = vget_high_u8(x[3]);
-    uint8x8_t d7 = vget_low_u8(x[3]);
-    uint8x8_t d8 = vget_high_u8(x[4]);
-    uint8x8_t d9 = vget_low_u8(x[4]);
-    uint8x8_t d10 = vget_high_u8(x[5]);
-    uint8x8_t d11 = vget_low_u8(x[5]);
-    uint8x8_t d12 = vget_high_u8(x[6]);
-    uint8x8_t d13 = vget_low_u8(x[6]);
-    uint8x8_t d14 = vget_high_u8(x[7]);
-    uint8x8_t d15 = vget_low_u8(x[7]);
-
-    // from racket phase 2
-    uint8x8_t d0_ = vpadd_u8(d0, d1);
-    uint8x8_t d1_ = vpadd_u8(d2, d3);
-    uint8x8_t d2_ = vpadd_u8(d4, d5);
-    uint8x8_t d3_ = vpadd_u8(d6, d7);
-    uint8x8_t d4_ = vpadd_u8(d8, d9);
-    uint8x8_t d5_ = vpadd_u8(d10, d11);
-    uint8x8_t d6_ = vpadd_u8(d12, d13);
-    uint8x8_t d7_ = vpadd_u8(d14, d15);
-
-    uint16x8_t q0_ = vpaddlq_u8(vcombine_u8(d0_, d1_));
-    uint16x8_t q1_ = vpaddlq_u8(vcombine_u8(d2_, d3_));
-    uint16x8_t q2_ = vpaddlq_u8(vcombine_u8(d4_, d5_));
-    uint16x8_t q3_ = vpaddlq_u8(vcombine_u8(d6_, d7_));
-    
-    uint16x4_t d0__  = vpadd_u16(vget_low_u16(q0_), vget_high_u16(q0_));
-    uint16x4_t d1__  = vpadd_u16(vget_low_u16(q1_), vget_high_u16(q1_));
-    uint16x4_t d2__  = vpadd_u16(vget_low_u16(q2_), vget_high_u16(q2_));
-    uint16x4_t d3__  = vpadd_u16(vget_low_u16(q3_), vget_high_u16(q3_));
-
-    uint16x4_t d0___  = vpadd_u16(d0__, d1__);
-    uint16x4_t d1___  = vpadd_u16(d2__, d3__);
-
-    // accumulate
-    uint16x8_t d0____ = vaddq_u16(output, vcombine_u16(d0___, d1___));
-
-    // todo data writebacks
-    vst1q_u16(dst, d0____);
-    return 0;
-}

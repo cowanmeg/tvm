@@ -59,7 +59,7 @@ Expr CodeGenARM::ARMPopcount(const Call *call) {
   using namespace ir;
   const Expr& e = call->args[2];
   ::llvm::Intrinsic::ID ctpop_id = ::llvm::Intrinsic::ctpop;
-  ::llvm::Intrinsic::ID vpaddlu_id = ::llvm::Intrinsic::arm_neon_vpaddlu;
+  ::llvm::Intrinsic::ID vpaddlu_id = ::llvm::Intrinsic::arm_neon_vpaddls;
 
   // Fallback to default llvm lowering rule if input type not a full vector or half vector length
   int total_size =  call->type.bits() * call->type.lanes();

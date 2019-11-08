@@ -234,7 +234,7 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     else:
         kernel_q = kernel
 
-    IB, N, CI, H, W = get_const_tuple(data_q.shape)
+    N, IB, CI, H, W = get_const_tuple(data_q.shape)
     KB, CO, _, KH, KW = get_const_tuple(kernel_q.shape)
 
     if isinstance(padding, int) or (isinstance(padding, (tuple, list)) and len(padding) == 2):
@@ -284,7 +284,8 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     VH = cfg["tile_oh"].size[-1]
     VW = cfg["tile_ow"].size[-1]
 
-    dvshape = (1, OH // VH, OW // VW, CI, VH*HSTR + KH-1, VW*WSTR + KW-1, IB)
+    dvshape = (1, OH // VH, OW // VW, CI, IB, VH*HSTR + KH-1, VW*WSTR + KW-1)
+    print(dvshape)
     kvshape = (CO//VC, CI, KH, KW, KB, VC)
     ovshape = (1, CO//VC, OH//VH, OW//VW, VH, VW, VC)
     oshape = (1, CO, OH, OW)
@@ -295,7 +296,7 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
         data_pad = data_q
 
     data_vec = tvm.compute(dvshape, lambda n, h, w, ci, b, vh, vw: \
-        data_pad[n][ci][h*VH*HSTR+vh][w*VW*WSTR+vw][b], name='data_vec')
+        data_pad[n][b][ci][h*VH*HSTR+vh][w*VW*WSTR+vw], name='data_vec')
 
     kernel_vec = tvm.compute(kvshape, lambda co, ci, dh, dw, b, vc: \
         kernel_q[b][co*VC+vc][ci][dh][dw], name='kernel_vec')

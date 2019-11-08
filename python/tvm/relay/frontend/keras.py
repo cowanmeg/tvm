@@ -650,8 +650,9 @@ def _convert_shiftnorm(inexpr, keras_layer, etab):
 
 
 def _convert_scalu(inexpr, keras_layer, etab):
-    scale = etab.new_const(keras_layer.get_weights()[0])
-    return _op.cast(inexpr, 'float32') * scale
+    #scale = etab.new_const(keras_layer.get_weights()[0])
+    scale = etab.new_const(keras_layer.scale.numpy())
+    return inexpr * scale
 
 def _convert_pact(inexpr, keras_layer, etab):
     # Read in the alpha from passed in list

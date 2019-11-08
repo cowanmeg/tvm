@@ -222,7 +222,7 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
                 half = ""
             if unipolar:
                 name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
-                # print("Calling", name)
+                print("Calling", name)
             else:
                 name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
                 # print("Calling ", name)

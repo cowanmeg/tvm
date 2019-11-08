@@ -44,7 +44,6 @@ def _kernel_vec_spatial_pack_nhwc(kernel, kernel_bits, VC, VCI, use_bitpack=True
 def spatial_pack_nhwc(cfg, data, kernel, stride, padding, activation_bits, weight_bits,
                       pack_dtype, out_dtype, unipolar):
     """ Compute convolution with pack on spatial axes. """
-    #print("ARM conv2d nhwc")
     assert data.shape[0].value == 1, "spatial pack convolution only support batch size=1"
     assert pack_dtype == 'uint8', "only support packing into uint8 bits"
     if unipolar:
@@ -222,7 +221,6 @@ def _intrin(m, k_i, w_b, x_b, unipolar):
                 half = ""
             if unipolar:
                 name = "update_unipolar_a%db%d%s" % (w_b, x_b, half)
-                print("Calling", name)
             else:
                 name = "update_bipolar_a%db%d%s" % (w_b, x_b, half)
                 # print("Calling ", name)
@@ -521,7 +519,7 @@ def _alter_bitserial_conv2d_layout_arm(attrs, inputs, tinfos, F):
             # Store the same config for the altered operator (workload)
             new_data = data
             new_kernel = tvm.placeholder((CO//VC, KH, KW, weight_bits, VC, CI_Packed), dtype=pack_dtype)
-            # print("Alter bitserial conv nhwc. New kernel", new_kernel.shape, kernel.shape)
+            print("Alter bitserial conv nhwc. New kernel", new_kernel.shape, kernel.shape)
             new_workload = autotvm.task.args_to_workload(
                 [new_data, new_kernel, strides, padding, activation_bits, weight_bits,
             pack_dtype, out_dtype, unipolar], bitserial_conv2d_nhwc)

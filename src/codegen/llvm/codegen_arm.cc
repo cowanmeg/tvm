@@ -40,22 +40,22 @@ class CodeGenARM final : public CodeGenCPU {
   llvm::Value* CreateIntrinsic(const Call* op) override;
 
  private:
-  //Expr ARMPopcount(const Call* op);
+  Expr ARMPopcount(const Call* op);
 };
 
 llvm::Value* CodeGenARM::CreateIntrinsic(const Call* op) {
-  // if (op->is_intrinsic("llvm_intrin")) {
-  //   llvm::Intrinsic::ID id = static_cast<llvm::Intrinsic::ID>(
-  //       op->args[0].as<UIntImm>()->value);
-  //   if (id == ::llvm::Intrinsic::ctpop) {
-  //     Expr e = ARMPopcount(op);
-  //     return CodeGenCPU::CreateIntrinsic(e.as<Call>());
-  //   }
-  // }
+   if (op->is_intrinsic("llvm_intrin")) {
+     llvm::Intrinsic::ID id = static_cast<llvm::Intrinsic::ID>(
+         op->args[0].as<UIntImm>()->value);
+     if (id == ::llvm::Intrinsic::ctpop) {
+       Expr e = ARMPopcount(op);
+       return CodeGenCPU::CreateIntrinsic(e.as<Call>());
+     }
+   }
   return CodeGenCPU::CreateIntrinsic(op);
 }
 
-/* Expr CodeGenARM::ARMPopcount(const Call *call) {
+Expr CodeGenARM::ARMPopcount(const Call *call) {
   using namespace ir;
   const Expr& e = call->args[2];
   ::llvm::Intrinsic::ID ctpop_id = ::llvm::Intrinsic::ctpop;
@@ -119,7 +119,7 @@ llvm::Value* CodeGenARM::CreateIntrinsic(const Call* op) {
   vcnt64_args.push_back(ir::UIntImm::make(UInt(32), 1));
   vcnt64_args.push_back(vcnt32);
   return ir::Call::make(call->type,  "llvm_intrin", vcnt64_args, Call::PureIntrinsic);
-}*/
+}
 
 TVM_REGISTER_GLOBAL("tvm.codegen.llvm.target_arm")
 .set_body([](const TVMArgs& targs, TVMRetValue* rv) {

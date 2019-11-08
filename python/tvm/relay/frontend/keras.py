@@ -355,8 +355,10 @@ def _convert_pooling(inexpr, keras_layer, etab):
     if pool_type == 'GlobalMaxPooling2D':
         return _convert_flatten(_op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     if pool_type == 'GlobalAveragePooling2D':
-        #return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
-        return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
+        if etab.data_layout == "NCHW":
+            return _op.nn.global_avg_pool2d(inexpr, **global_pool_params)
+        else:
+            return _convert_flatten(_op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
     pool_h, pool_w = keras_layer.pool_size
     stride_h, stride_w = keras_layer.strides
     params = {'pool_size': [pool_h, pool_w],

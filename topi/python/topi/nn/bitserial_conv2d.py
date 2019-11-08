@@ -285,7 +285,6 @@ def spatial_pack_nchw(cfg, data, kernel, stride, padding, in_bits, weight_bits,
     VW = cfg["tile_ow"].size[-1]
 
     dvshape = (1, OH // VH, OW // VW, CI, IB, VH*HSTR + KH-1, VW*WSTR + KW-1)
-    print(dvshape)
     kvshape = (CO//VC, CI, KH, KW, KB, VC)
     ovshape = (1, CO//VC, OH//VH, OW//VW, VH, VW, VC)
     oshape = (1, CO, OH, OW)
